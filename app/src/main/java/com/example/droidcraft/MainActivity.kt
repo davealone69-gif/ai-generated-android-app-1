@@ -14,8 +14,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
@@ -173,7 +171,6 @@ class SynthEngine {
     }
 }
 
-// Layout helper classes
 data class WhiteKey(val label: String, val midiOffset: Int)
 data class BlackKey(val label: String, val midiOffset: Int, val positionAfterWhiteIndex: Int)
 
@@ -185,16 +182,13 @@ fun MainAppScreen(synthEngine: SynthEngine) {
     var releaseSpeedVal by remember { mutableStateOf(0.005f) }
     var attackSpeedVal by remember { mutableStateOf(0.008f) }
 
-    // Synchronize Synth Settings
     LaunchedEffect(selectedWaveType) { synthEngine.waveType = selectedWaveType }
     LaunchedEffect(masterVolume) { synthEngine.volume = masterVolume }
     LaunchedEffect(releaseSpeedVal) { synthEngine.releaseSpeed = releaseSpeedVal.toDouble() }
     LaunchedEffect(attackSpeedVal) { synthEngine.attackSpeed = attackSpeedVal.toDouble() }
 
-    // Keep track of which frequencies are pressed visually
     val activePressedFrequencies = remember { mutableStateMapOf<Double, Boolean>() }
 
-    // White Keys & Black Keys Layout mappings
     val whiteKeysList = listOf(
         WhiteKey("C", 0),
         WhiteKey("D", 2),
@@ -232,7 +226,6 @@ fun MainAppScreen(synthEngine: SynthEngine) {
 
         if (isLandscape) {
             Row(modifier = Modifier.fillMaxSize()) {
-                // Left Panel: Synthesizer Controls
                 Column(
                     modifier = Modifier
                         .weight(1f)
@@ -278,7 +271,6 @@ fun MainAppScreen(synthEngine: SynthEngine) {
                     )
                 }
 
-                // Right Panel: Piano Keys
                 Box(
                     modifier = Modifier
                         .weight(2.5f)
@@ -302,14 +294,12 @@ fun MainAppScreen(synthEngine: SynthEngine) {
                 }
             }
         } else {
-            // Portrait Layout
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(8.dp),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                // Header & Visualizer
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -325,8 +315,7 @@ fun MainAppScreen(synthEngine: SynthEngine) {
                             text = "DroidCraft Synth Engine",
                             color = Color(0xFF38BDF8),
                             fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp
-                        )
+                            fontSize = 18.sp)
                         IconButton(onClick = {
                             synthEngine.allNotesOff()
                             activePressedFrequencies.clear()
@@ -350,7 +339,6 @@ fun MainAppScreen(synthEngine: SynthEngine) {
                     )
                 }
 
-                // Wave selectors, Volume, ADSR
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -376,7 +364,6 @@ fun MainAppScreen(synthEngine: SynthEngine) {
                     )
                 }
 
-                // Keybed
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -428,7 +415,6 @@ fun OscilloscopeWidget(
         val height = size.height
         val centerY = height / 2f
 
-        // Draw dynamic Grid lines
         val gridLines = 8
         for (i in 1 until gridLines) {
             val x = (width / gridLines) * i
@@ -446,7 +432,6 @@ fun OscilloscopeWidget(
             strokeWidth = 1.5f
         )
 
-        // Draw Waveform representation
         val path = Path()
         val step = 2
         path.moveTo(0f, centerY)
@@ -474,7 +459,6 @@ fun OscilloscopeWidget(
                 }
                 mixedSample = (mixedSample / max(1.0, activeNotes.size.toDouble()))
             } else {
-                // Idle idle movement
                 mixedSample = sin(t + phaseOffset) * 0.1
             }
 
@@ -508,7 +492,6 @@ fun SynthesizerControls(
     Column(
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // Wave Selection Row
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -531,11 +514,10 @@ fun SynthesizerControls(
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
                     )
-                }
+                } 
             }
         }
 
-        // Sliders (Volume, Attack, Release)
         Column {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -592,7 +574,6 @@ fun SynthesizerControls(
             )
         }
 
-        // Octave & Panic Controller row
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -609,7 +590,7 @@ fun SynthesizerControls(
                         colors = IconButtonDefaults.iconButtonColors(containerColor = Color(0xFF334155)),
                         modifier = Modifier.size(36.dp)
                     ) {
-                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Octave Down", tint = Color.White)
+                        Text("▼", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     }
                     Text(
                         text = "C$baseOctave",
@@ -624,7 +605,7 @@ fun SynthesizerControls(
                         colors = IconButtonDefaults.iconButtonColors(containerColor = Color(0xFF334155)),
                         modifier = Modifier.size(36.dp)
                     ) {
-                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Octave Up", tint = Color.White)
+                        Text("▲", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     }
                 }
             }
@@ -663,7 +644,6 @@ fun PianoKeyboard(
         val whiteCount = whiteKeys.size
         val whiteKeyWidth = totalWidth / whiteCount
 
-        // 1. Draw White Keys
         Row(modifier = Modifier.fillMaxSize()) {
             whiteKeys.forEach { keySpec ->
                 val freq = calculateFrequency(keySpec.midiOffset)
@@ -710,7 +690,6 @@ fun PianoKeyboard(
             }
         }
 
-        // 2. Draw Overlay Black Keys
         val blackKeyWidth = whiteKeyWidth * 0.65f
         val blackKeyHeight = height * 0.58f
 
@@ -718,7 +697,6 @@ fun PianoKeyboard(
             val freq = calculateFrequency(blackKey.midiOffset)
             val isPressed = activeFrequencies[freq] == true
 
-            // Calculate exact overlay X coordinate based on its relative white key index
             val relativeXOffset = (whiteKeyWidth * (blackKey.positionAfterWhiteIndex + 1)) - (blackKeyWidth / 2f)
 
             Box(
@@ -731,7 +709,7 @@ fun PianoKeyboard(
                         brush = if (isPressed) {
                             Brush.verticalGradient(
                                 colors = listOf(Color(0xFFA855F7), Color(0xFF6B21A8))
-                            )
+                                )
                         } else {
                             Brush.verticalGradient(
                                 colors = listOf(Color(0xFF334155), Color(0xFF0F172A))
