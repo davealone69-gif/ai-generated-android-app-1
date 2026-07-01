@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -374,7 +375,7 @@ fun MainAppScreen() {
                 val keyWidth = maxWidth / totalWhiteKeys
 
                 // Render White Keys
-                Row(modifier = Modifier.fillMaxSize()) {
+                Row(modifier = Modifier.fillMaxSize()) { 
                     whiteKeys.forEach { key ->
                         val octaveLabel = 4 + octaveShift + (key.semitones / 12)
                         WhitePianoKey(
