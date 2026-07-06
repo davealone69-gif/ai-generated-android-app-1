@@ -17,6 +17,18 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Ensure Gradle wrapper exists
+        run: |
+          if [ ! -f ./gradlew ]; then
+            echo "Gradle wrapper 'gradlew' not found. Attempting to generate it."
+            # Install Gradle if not already available on the runner.
+            # `ubuntu-latest` usually has an older version of 'gradle' or it can be installed via apt.
+            sudo apt-get update
+            sudo apt-get install -y gradle
+            # Generate the wrapper script. The version (8.5) is derived from gradle/wrapper/gradle-wrapper.properties
+            gradle wrapper --gradle-version 8.5
+          fi
+
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
 
