@@ -12,7 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
+import androidx.compose.material3.* // Ensure all Material3 components are imported
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -24,11 +24,33 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+// Custom Composable theme to wrap the application UI
+@Composable
+fun DroidCraftTheme(content: @Composable () -> Unit) {
+    // A simple Material3 theme.
+    // For a more comprehensive theme, you would define custom ColorScheme, Typography, and Shapes.
+    // Here, we use the default Material3 color scheme which adapts to light/dark mode.
+    MaterialTheme(
+        colorScheme = MaterialTheme.colorScheme, // Uses default light/dark colors
+        typography = MaterialTheme.typography,
+        content = content
+    )
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MainAppScreen()
+            // Wrap the entire app content with the DroidCraftTheme
+            DroidCraftTheme {
+                // A surface container using the 'background' color from the theme
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    MainAppScreen()
+                }
+            }
         }
     }
 }
