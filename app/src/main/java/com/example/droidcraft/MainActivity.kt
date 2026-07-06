@@ -58,7 +58,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MainAppScreen()
-        }
+        } 
     }
 }
 
@@ -157,11 +157,14 @@ fun MainAppScreen() {
                 }
 
                 // Smooth ADSR Linear Envelope (Attack and Release fade to prevent hardware clicks)
-                val attackBoundary = numSamples * 0.05
-                val releaseBoundary = numSamples * 0.8
+                val attackBoundary = (numSamples * 0.05).toInt()
+                val releaseBoundary = (numSamples * 0.8).toInt()
                 val envelope = when {
-                    i < attackBoundary -> i / attackBoundary
-                    i > releaseBoundary -> 1.0 - (i - releaseBoundary) / (numSamples - releaseBoundary)
+                    i < attackBoundary -> if (attackBoundary > 0) i.toDouble() / attackBoundary else 1.0
+                    i > releaseBoundary -> {
+                        val divisor = numSamples - releaseBoundary
+                        if (divisor > 0) 1.0 - (i - releaseBoundary).toDouble() / divisor else 1.0
+                    } 
                     else -> 1.0
                 }
 
@@ -551,7 +554,7 @@ fun MainAppScreen() {
                         ),
                         modifier = Modifier.height(30.dp),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
-                    ) {
+                    ) { 
                         Text(
                             text = if (isRecording) "■ STOP" else "● REC",
                             fontSize = 11.sp,
@@ -566,7 +569,7 @@ fun MainAppScreen() {
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4C566A)),
                         modifier = Modifier.height(30.dp),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
-                    ) {
+                    ) { 
                         Text("▶ PLAY REC", fontSize = 11.sp, color = Color.White)
                     }
 
@@ -578,7 +581,7 @@ fun MainAppScreen() {
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E3440)),
                         modifier = Modifier.height(30.dp),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
-                    ) {
+                    ) { 
                         Text("CLEAR", fontSize = 11.sp, color = Color.Gray)
                     }
                 }
@@ -674,7 +677,7 @@ fun MainAppScreen() {
                 // Layer 2: Render Black Keys Overlay (Positioned accurately at boundaries)
                 pianoKeys.forEachIndexed { index, key ->
                     if (key.hasBlackKeyRight) {
-                        val xOffset = (index + 1) * whiteKeyWidth - (blackKeyWidth / 2)
+                        val xOffset = (index + 1) * whiteKeyWidth - (blackKeyWidth * 0.5f)
                         val isHighlighted = activeMidiHighlight == key.blackKeyMidi
 
                         Box(
