@@ -17,10 +17,6 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # The "Ensure Gradle wrapper exists" step has been removed.
-      # The `gradlew` script should be committed to the repository and is self-sufficient.
-      # Manually installing Gradle via apt and regenerating the wrapper is usually unnecessary and can be problematic.
-
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
 
