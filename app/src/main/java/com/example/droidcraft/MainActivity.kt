@@ -7,6 +7,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,7 +28,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     PianoScreen(::playTone)
                 }
             }
@@ -89,11 +90,9 @@ fun PianoScreen(onPlay: (Double) -> Unit) {
                     modifier = Modifier
                         .size(40.dp, 150.dp)
                         .background(Color.White, RoundedCornerShape(4.dp))
-                        .clickable { scope.launch(Dispatchers.IO) { onPlay(freq) } },
-                    contentAlignment = Alignment.BottomCenter
-                ) {
-                    HorizontalDivider(color = Color.Black, thickness = 1.dp)
-                }
+                        .border(1.dp, Color.Black, RoundedCornerShape(4.dp))
+                        .clickable { scope.launch(Dispatchers.IO) { onPlay(freq) } }
+                )
             }
         }
     }
