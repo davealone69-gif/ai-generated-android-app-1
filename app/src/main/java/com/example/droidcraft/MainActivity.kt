@@ -59,12 +59,11 @@ class MainActivity : ComponentActivity() {
                     .build()
             )
             .setBufferSizeInBytes(numSamples * 2)
+            .setTransferMode(AudioTrack.MODE_STATIC)
             .build()
 
-        audioTrack.play()
         audioTrack.write(generatedSound, 0, numSamples)
-        audioTrack.stop()
-        audioTrack.release()
+        audioTrack.play()
     }
 }
 
@@ -87,7 +86,7 @@ fun PianoScreen(onPlay: (Double) -> Unit) {
                         .size(40.dp, 150.dp)
                         .background(Color.White, RoundedCornerShape(4.dp))
                         .border(1.dp, Color.Black, RoundedCornerShape(4.dp))
-                        .clickable { scope.launch(Dispatchers.IO) { onPlay(freq) } }
+                        .clickable { scope.launch(Dispatchers.Default) { onPlay(freq) } }
                 )
             }
         }
