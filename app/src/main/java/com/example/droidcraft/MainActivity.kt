@@ -23,7 +23,6 @@ import kotlin.math.sin
 class MainActivity : ComponentActivity() {
     private val sampleRate = 44100
     private var audioTrack: AudioTrack? = null
-    private val audioLock = Any()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,6 +49,8 @@ class MainActivity : ComponentActivity() {
             )
             .setBufferSizeInBytes(bufferSize)
             .build()
+        
+        audioTrack?.play()
 
         setContent {
             MaterialTheme {
@@ -71,21 +72,14 @@ class MainActivity : ComponentActivity() {
             generatedSnd[i] = (sin(angle) * Short.MAX_VALUE).toInt().toShort()
         }
 
-        synchronized(audioLock) {
-            audioTrack?.let {
-                if (it.playState != AudioTrack.PLAYSTATE_PLAYING) it.play()
-                it.write(generatedSnd, 0, numSamples)
-            }
-        }
+        audioTrack?.write(generatedSnd, 0, numSamples)
     }
 
     override fun onDestroy() {
+        audioTrack?.stop()
+        audioTrack?.release()
+        audioTrack = null
         super.onDestroy()
-        synchronized(audioLock) {
-            audioTrack?.stop()
-            audioTrack?.release()
-            audioTrack = null
-        }
     }
 }
 
@@ -111,7 +105,7 @@ fun PianoScreen(onPlayTone: (Double) -> Unit) {
                         .size(45.dp, 150.dp)
                         .background(Color.White)
                         .border(1.dp, Color.Black)
-                        .clickable { scope.launch(Dispatchers.IO) { onPlayTone(freq) } },
+                        .clickable { scope.launch(Dispatchers.Default) { onPlayTone(freq) } },
                     contentAlignment = Alignment.BottomCenter
                 ) {
                     Text(text = name, modifier = Modifier.padding(bottom = 8.dp), color = Color.Black)
