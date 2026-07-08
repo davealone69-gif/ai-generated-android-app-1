@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.Material3.DayNight.NoActionBar" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Inherit from the actual library theme instead of self -->
+        <item name="android:statusBarColor">?attr/colorPrimary</item>
+    </style>
+    <style name="Theme.DroidCraft" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="android:statusBarColor">?attr/colorPrimary</item>
     </style>
 </resources>
