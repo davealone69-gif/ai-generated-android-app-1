@@ -29,9 +29,13 @@ import kotlin.math.sin
 
 class SynthEngine {
     private val sampleRate = 44100
-    private val executor = Executors.newSingleThreadExecutor()
+    private val executor = Executors.newFixedThreadPool(4)
     
-    private val minBufferSize = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+    private val minBufferSize = AudioTrack.getMinBufferSize(
+        sampleRate, 
+        AudioFormat.CHANNEL_OUT_MONO, 
+        AudioFormat.ENCODING_PCM_16BIT
+    )
     
     private val audioTrack: AudioTrack = AudioTrack.Builder()
         .setAudioAttributes(AudioAttributes.Builder()
@@ -44,18 +48,21 @@ class SynthEngine {
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
             .build())
         .setBufferSizeInBytes(minBufferSize)
-        .build().apply { play() }
+        .build()
+
+    init {
+        audioTrack.play()
+    }
 
     fun playNote(freq: Double) {
         executor.submit {
-            val duration = 0.3
+            val duration = 0.25
             val numSamples = (duration * sampleRate).toInt()
             val buffer = ShortArray(numSamples)
             
             for (i in 0 until numSamples) {
-                // Simple ADSR envelope
-                val envelope = if (i < 1000) i / 1000.0 else 1.0 - (i.toDouble() / numSamples)
-                buffer[i] = (sin(2.0 * Math.PI * i * freq / sampleRate) * envelope * Short.MAX_VALUE * 0.5).toInt().toShort()
+                val envelope = if (i < 500) i / 500.0 else 1.0 - (i.toDouble() / numSamples)
+                buffer[i] = (sin(2.0 * Math.PI * i * freq / sampleRate) * envelope * Short.MAX_VALUE * 0.3).toInt().toShort()
             }
             audioTrack.write(buffer, 0, numSamples, AudioTrack.WRITE_BLOCKING)
         }
@@ -63,6 +70,7 @@ class SynthEngine {
 
     fun release() {
         executor.shutdown()
+        audioTrack.stop()
         audioTrack.release()
     }
 }
@@ -71,8 +79,8 @@ class PianoViewModel : ViewModel() {
     private val synth = SynthEngine()
     fun triggerNote(freq: Double) = synth.playNote(freq)
     override fun onCleared() {
-        super.onCleared()
         synth.release()
+        super.onCleared()
     }
 }
 
@@ -120,7 +128,6 @@ fun PianoKey(note: String, onPlay: () -> Unit) {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     isPressed = true
                     onPlay()
-                    down.consume()
                     waitForUpOrCancellation()
                     isPressed = false
                 }
