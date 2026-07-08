@@ -7,7 +7,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -18,22 +20,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlin.math.exp
 import kotlin.math.sin
 
-class PianoViewModel : ViewModel() {
+class SynthEngine {
     private val sampleRate = 44100
-    private var audioTrack: AudioTrack? = null
+    private val audioTrack: AudioTrack
 
     init {
-        val bufferSize = AudioTrack.getMinBufferSize(
-            sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
-        )
+        val bufferSize = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
         audioTrack = AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -44,27 +47,53 @@ class PianoViewModel : ViewModel() {
                 .setSampleRate(sampleRate)
                 .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                 .build())
-            .setBufferSizeInBytes(bufferSize)
+            .setBufferSizeInBytes(bufferSize * 2)
             .build()
-        audioTrack?.play()
+        audioTrack.play()
     }
 
-    fun playTone(freq: Double) {
-        viewModelScope.launch(Dispatchers.Default) {
-            val duration = 0.2
-            val numSamples = (duration * sampleRate).toInt()
-            val buffer = ShortArray(numSamples)
-            for (i in 0 until numSamples) {
-                val angle = 2.0 * Math.PI * i.toDouble() / (sampleRate / freq)
-                buffer[i] = (sin(angle) * 32767).toInt().toShort()
+    fun playNote(freq: Double) {
+        val durationSeconds = 0.5
+        val numSamples = (durationSeconds * sampleRate).toInt()
+        val buffer = ShortArray(numSamples)
+        
+        // ADSR Envelope Parameters
+        val attackSamples = (0.05 * sampleRate).toInt()
+        val releaseSamples = (0.2 * sampleRate).toInt()
+
+        for (i in 0 until numSamples) {
+            var envelope = 1.0
+            if (i < attackSamples) {
+                envelope = i.toDouble() / attackSamples
+            } else if (i > numSamples - releaseSamples) {
+                envelope = (numSamples - i).toDouble() / releaseSamples
             }
-            audioTrack?.write(buffer, 0, numSamples)
+            
+            val angle = 2.0 * Math.PI * i.toDouble() * freq / sampleRate
+            buffer[i] = (sin(angle) * envelope * 30000).toInt().toShort()
         }
+        
+        // Non-blocking write to prevent UI stutters
+        Thread {
+            audioTrack.write(buffer, 0, numSamples)
+        }.start()
+    }
+
+    fun release() {
+        audioTrack.stop()
+        audioTrack.release()
+    }
+}
+
+class PianoViewModel : ViewModel() {
+    private val synth = SynthEngine()
+
+    fun triggerNote(freq: Double) {
+        synth.playNote(freq)
     }
 
     override fun onCleared() {
-        audioTrack?.stop()
-        audioTrack?.release()
+        synth.release()
         super.onCleared()
     }
 }
@@ -73,10 +102,15 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    val viewModel: PianoViewModel = viewModel()
-                    PianoScreen(viewModel)
+            MaterialTheme(
+                colorScheme = darkColorScheme(
+                    primary = Color(0xFFBB86FC),
+                    background = Color(0xFF121212),
+                    surface = Color(0xFF1E1E1E)
+                )
+            ) {
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    PianoScreen(viewModel())
                 }
             }
         }
@@ -91,15 +125,15 @@ fun PianoScreen(viewModel: PianoViewModel) {
     )
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
+        modifier = Modifier.fillMaxSize().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("Synth Piano", style = MaterialTheme.typography.displaySmall)
-        Spacer(modifier = Modifier.height(48.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("DROIDCRAFT SYNTH", style = MaterialTheme.typography.headlineMedium, color = Color.White, letterSpacing = 2.sp)
+        Spacer(modifier = Modifier.height(64.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             notes.forEach { (name, freq) ->
-                PianoKey(name) { viewModel.playTone(freq) }
+                PianoKey(name) { viewModel.triggerNote(freq) }
             }
         }
     }
@@ -108,14 +142,18 @@ fun PianoScreen(viewModel: PianoViewModel) {
 @Composable
 fun PianoKey(note: String, onClick: () -> Unit) {
     var isPressed by remember { mutableStateOf(false) }
-    val color by animateColorAsState(if (isPressed) Color(0xFFBB86FC) else Color(0xFFEEEEEE), label = "color")
+    val color by animateColorAsState(
+        if (isPressed) MaterialTheme.colorScheme.primary else Color(0xFFE0E0E0),
+        animationSpec = tween(50)
+    )
 
     Box(
         modifier = Modifier
-            .width(45.dp)
-            .height(200.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .width(52.dp)
+            .height(240.dp)
+            .clip(RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp))
             .background(color)
+            .border(1.dp, Color.Black.copy(alpha = 0.2f), RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp))
             .pointerInput(Unit) {
                 detectTapGestures(
                     onPress = {
@@ -128,6 +166,11 @@ fun PianoKey(note: String, onClick: () -> Unit) {
             },
         contentAlignment = Alignment.BottomCenter
     ) {
-        Text(note, color = if (isPressed) Color.White else Color.Black, modifier = Modifier.padding(bottom = 16.dp))
+        Text(
+            note,
+            color = if (isPressed) Color.White else Color.Black.copy(alpha = 0.6f),
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(bottom = 24.dp)
+        )
     }
 }
