@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -49,17 +50,20 @@ class PianoViewModel : ViewModel() {
     }
 
     fun playTone(freq: Double) {
-        val duration = 0.3
-        val numSamples = (duration * sampleRate).toInt()
-        val buffer = ShortArray(numSamples)
-        for (i in 0 until numSamples) {
-            val angle = 2.0 * Math.PI * i.toDouble() / (sampleRate / freq)
-            buffer[i] = (sin(angle) * 32767).toInt().toShort()
+        viewModelScope.launch(Dispatchers.Default) {
+            val duration = 0.2
+            val numSamples = (duration * sampleRate).toInt()
+            val buffer = ShortArray(numSamples)
+            for (i in 0 until numSamples) {
+                val angle = 2.0 * Math.PI * i.toDouble() / (sampleRate / freq)
+                buffer[i] = (sin(angle) * 32767).toInt().toShort()
+            }
+            audioTrack?.write(buffer, 0, numSamples)
         }
-        audioTrack?.write(buffer, 0, numSamples)
     }
 
     override fun onCleared() {
+        audioTrack?.stop()
         audioTrack?.release()
         super.onCleared()
     }
@@ -93,7 +97,7 @@ fun PianoScreen(viewModel: PianoViewModel) {
     ) {
         Text("Synth Piano", style = MaterialTheme.typography.displaySmall)
         Spacer(modifier = Modifier.height(48.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             notes.forEach { (name, freq) ->
                 PianoKey(name) { viewModel.playTone(freq) }
             }
@@ -104,13 +108,13 @@ fun PianoScreen(viewModel: PianoViewModel) {
 @Composable
 fun PianoKey(note: String, onClick: () -> Unit) {
     var isPressed by remember { mutableStateOf(false) }
-    val color by animateColorAsState(if (isPressed) Color(0xFF6200EE) else Color(0xFFEEEEEE), label = "color")
+    val color by animateColorAsState(if (isPressed) Color(0xFFBB86FC) else Color(0xFFEEEEEE), label = "color")
 
     Box(
         modifier = Modifier
-            .width(50.dp)
+            .width(45.dp)
             .height(200.dp)
-            .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(color)
             .pointerInput(Unit) {
                 detectTapGestures(
