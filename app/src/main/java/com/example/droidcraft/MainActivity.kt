@@ -9,7 +9,6 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -51,23 +50,23 @@ class MainActivity : ComponentActivity() {
             .build()
 
         setContent {
-            PianoApp(::playTone)
+            PianoScreen { frequency -> playTone(frequency) }
         }
     }
 
-    private fun playTone(frequency: Double) {
-        val scope = androidx.compose.runtime.rememberCoroutineScope()
-        // Simple synth: Generate sine wave
+    private fun playTone(freqHz: Double) {
         val durationMs = 300
         val numSamples = (durationMs * sampleRate / 1000)
-        val sample = ShortArray(numSamples)
-        for (i in 0 until numSamples) {
-            sample[i] = (sin(2.0 * Math.PI * i.toDouble() / (sampleRate / frequency)) * 32767).toInt().toShort()
-        }
+        val generatedSnd = ShortArray(numSamples)
         
+        for (i in 0 until numSamples) {
+            val time = i.toDouble() / sampleRate
+            generatedSnd[i] = (sin(2.0 * Math.PI * freqHz * time) * Short.MAX_VALUE).toInt().toShort()
+        }
+
         audioTrack?.apply {
             if (playState != AudioTrack.PLAYSTATE_PLAYING) play()
-            write(sample, 0, numSamples)
+            write(generatedSnd, 0, numSamples)
         }
     }
 
@@ -78,15 +77,11 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun PianoApp(onPlay: (Double) -> Unit) {
-    val notes = mapOf(
-        "C" to 261.63,
-        "D" to 293.66,
-        "E" to 329.63,
-        "F" to 349.23,
-        "G" to 392.00,
-        "A" to 440.00,
-        "B" to 493.88
+fun PianoScreen(onPlayTone: (Double) -> Unit) {
+    val scope = rememberCoroutineScope()
+    val notes = listOf(
+        "C" to 261.63, "D" to 293.66, "E" to 329.63, 
+        "F" to 349.23, "G" to 392.00, "A" to 440.00, "B" to 493.88
     )
 
     Column(
@@ -96,28 +91,18 @@ fun PianoApp(onPlay: (Double) -> Unit) {
     ) {
         Text(text = "DroidCraft Synth Piano", style = MaterialTheme.typography.headlineMedium)
         Spacer(modifier = Modifier.height(32.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().height(200.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             notes.forEach { (name, freq) ->
-                PianoKey(name) { onPlay(freq) }
+                Box(
+                    modifier = Modifier
+                        .size(45.dp, 150.dp)
+                        .background(Color.White)
+                        .clickable { scope.launch(Dispatchers.IO) { onPlayTone(freq) } },
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    Text(text = name, modifier = Modifier.padding(bottom = 8.dp))
+                }
             }
         }
-    }
-}
-
-@Composable
-fun PianoKey(label: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .width(40.dp)
-            .fillMaxHeight()
-            .padding(2.dp)
-            .background(Color.White, RoundedCornerShape(4.dp))
-            .clickable { onClick() },
-        contentAlignment = Alignment.BottomCenter
-    ) {
-        Text(text = label, modifier = Modifier.padding(bottom = 8.dp))
     }
 }
