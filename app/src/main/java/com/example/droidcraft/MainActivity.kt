@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
@@ -51,7 +52,7 @@ fun PianoScreen() {
         ) {
             notes.forEach { frequency ->
                 PianoKey(frequency) {
-                    scope.launch(Dispatchers.Default) {
+                    scope.launch(Dispatchers.IO) {
                         playTone(frequency)
                     }
                 }
@@ -75,17 +76,14 @@ fun PianoKey(frequency: Double, onClick: () -> Unit) {
     }
 }
 
-fun playTone(freq: Double) {
+suspend fun playTone(freq: Double) = withContext(Dispatchers.IO) {
     val sampleRate = 44100
     val duration = 0.5
     val numSamples = (duration * sampleRate).toInt()
-    val generatedSound = ByteArray(2 * numSamples)
+    val generatedSound = ShortArray(numSamples)
 
     for (i in 0 until numSamples) {
-        val sample = sin(2.0 * Math.PI * i / (sampleRate / freq))
-        val pcm = (sample * 32767).toInt()
-        generatedSound[2 * i] = (pcm and 0xff).toByte()
-        generatedSound[2 * i + 1] = ((pcm shr 8) and 0xff).toByte()
+        generatedSound[i] = (sin(2.0 * Math.PI * i / (sampleRate / freq)) * 32767).toInt().toShort()
     }
 
     val minBufferSize = AudioTrack.getMinBufferSize(
@@ -108,7 +106,7 @@ fun playTone(freq: Double) {
                 .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                 .build()
         )
-        .setBufferSizeInBytes(maxOf(generatedSound.size, minBufferSize))
+        .setBufferSizeInBytes(maxOf(generatedSound.size * 2, minBufferSize))
         .build()
 
     audioTrack.play()
