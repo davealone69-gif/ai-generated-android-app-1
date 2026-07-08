@@ -71,8 +71,8 @@ fun PianoAppScreen() {
             audioTrack.write(buffer, 0, buffer.size)
             audioTrack.play()
             
-            // Cleanup after playback
-            kotlinx.coroutines.delay(durationMs.toLong() + 50)
+            // Wait for playback to finish
+            Thread.sleep(durationMs.toLong())
             audioTrack.stop()
             audioTrack.release()
         }
