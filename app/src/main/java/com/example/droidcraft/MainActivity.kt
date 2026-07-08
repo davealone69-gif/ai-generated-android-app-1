@@ -51,7 +51,8 @@ fun PianoAppScreen() {
             val buffer = ShortArray(numSamples)
             
             for (i in 0 until numSamples) {
-                buffer[i] = (sin(2.0 * Math.PI * i.toDouble() / (sampleRate / freqHz)) * Short.MAX_VALUE * 0.5).toInt().toShort()
+                val angle = 2.0 * Math.PI * i.toDouble() / (sampleRate / freqHz)
+                buffer[i] = (sin(angle) * Short.MAX_VALUE * 0.4).toInt().toShort()
             }
             
             val audioTrack = AudioTrack.Builder()
@@ -69,12 +70,8 @@ fun PianoAppScreen() {
                 .build()
             
             audioTrack.write(buffer, 0, buffer.size)
+            audioTrack.setNotificationMarkerPosition(numSamples)
             audioTrack.play()
-            
-            // Wait for playback to finish
-            Thread.sleep(durationMs.toLong())
-            audioTrack.stop()
-            audioTrack.release()
         }
     }
 
