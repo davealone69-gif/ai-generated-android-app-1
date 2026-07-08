@@ -19,10 +19,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.waitForUpOrCancellation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.*
 import java.util.concurrent.Executors
 import kotlin.math.sin
@@ -71,7 +72,10 @@ class SynthEngine {
 class PianoViewModel : ViewModel() {
     private val synth = SynthEngine()
     fun triggerNote(freq: Double) = synth.playNote(freq)
-    override fun onCleared() = synth.release()
+    override fun onCleared() {
+        super.onCleared()
+        synth.release()
+    }
 }
 
 class MainActivity : ComponentActivity() {
@@ -88,7 +92,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun PianoScreen(viewModel: PianoViewModel = androidx.lifecycle.viewmodel.compose.viewModel()) {
+fun PianoScreen(viewModel: PianoViewModel = viewModel()) {
     val notes = listOf("C" to 261.63, "D" to 293.66, "E" to 329.63, "F" to 349.23, "G" to 392.00, "A" to 440.00, "B" to 493.88)
     
     Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
@@ -105,7 +109,7 @@ fun PianoScreen(viewModel: PianoViewModel = androidx.lifecycle.viewmodel.compose
 @Composable
 fun PianoKey(note: String, onPlay: () -> Unit) {
     var isPressed by remember { mutableStateOf(false) }
-    val color by animateColorAsState(if (isPressed) MaterialTheme.colorScheme.primary else Color(0xFFE0E0E0))
+    val color by animateColorAsState(if (isPressed) MaterialTheme.colorScheme.primary else Color(0xFFE0E0E0), label = "color")
 
     Box(
         modifier = Modifier
