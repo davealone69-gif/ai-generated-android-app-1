@@ -25,7 +25,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            PianoAppScreen()
+            MaterialTheme {
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    PianoAppScreen()
+                }
+            }
         }
     }
 }
@@ -67,8 +71,10 @@ fun PianoAppScreen() {
             audioTrack.write(buffer, 0, buffer.size)
             audioTrack.play()
             
-            // Cleanup after playback
-            // In a production app, use a more robust queueing system
+            // Allow time for audio to finish before releasing
+            Thread.sleep(durationMs.toLong())
+            audioTrack.stop()
+            audioTrack.release()
         }
     }
 
