@@ -20,10 +20,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlin.math.sin
 
 class PianoViewModel : ViewModel() {
@@ -50,16 +49,14 @@ class PianoViewModel : ViewModel() {
     }
 
     fun playTone(freq: Double) {
-        viewModelScope.launch(Dispatchers.Default) {
-            val duration = 0.3
-            val numSamples = (duration * sampleRate).toInt()
-            val buffer = ShortArray(numSamples)
-            for (i in 0 until numSamples) {
-                val angle = 2.0 * Math.PI * i.toDouble() / (sampleRate / freq)
-                buffer[i] = (sin(angle) * 32767).toInt().toShort()
-            }
-            audioTrack?.write(buffer, 0, numSamples)
+        val duration = 0.3
+        val numSamples = (duration * sampleRate).toInt()
+        val buffer = ShortArray(numSamples)
+        for (i in 0 until numSamples) {
+            val angle = 2.0 * Math.PI * i.toDouble() / (sampleRate / freq)
+            buffer[i] = (sin(angle) * 32767).toInt().toShort()
         }
+        audioTrack?.write(buffer, 0, numSamples)
     }
 
     override fun onCleared() {
@@ -71,10 +68,10 @@ class PianoViewModel : ViewModel() {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val viewModel = PianoViewModel()
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize()) {
+                    val viewModel: PianoViewModel = viewModel()
                     PianoScreen(viewModel)
                 }
             }
