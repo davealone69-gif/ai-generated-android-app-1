@@ -28,7 +28,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Initialize AudioTrack once
+        val minBufferSize = AudioTrack.getMinBufferSize(
+            sampleRate, 
+            AudioFormat.CHANNEL_OUT_MONO, 
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+
         audioTrack = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -43,8 +48,8 @@ class MainActivity : ComponentActivity() {
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                     .build()
             )
-            .setBufferSizeInBytes(sampleRate) // 1 second buffer
-            .setTransferMode(AudioTrack.MODE_STREAM)
+            .setBufferSizeInBytes(minBufferSize)
+            .setTransferMode(AudioTrack.MODE_STATIC) // Use STATIC for short notes
             .build()
 
         setContent {
@@ -66,8 +71,12 @@ class MainActivity : ComponentActivity() {
         }
 
         audioTrack?.apply {
-            if (playState != AudioTrack.PLAYSTATE_PLAYING) play()
+            if (playState == AudioTrack.PLAYSTATE_PLAYING) {
+                stop()
+            }
+            reloadStaticData()
             write(generatedSound, 0, numSamples)
+            play()
         }
     }
 
