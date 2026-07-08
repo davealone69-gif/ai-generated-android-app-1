@@ -71,8 +71,8 @@ fun PianoAppScreen() {
             audioTrack.write(buffer, 0, buffer.size)
             audioTrack.play()
             
-            // Allow time for audio to finish before releasing
-            Thread.sleep(durationMs.toLong())
+            // Cleanup after playback
+            kotlinx.coroutines.delay(durationMs.toLong() + 50)
             audioTrack.stop()
             audioTrack.release()
         }
@@ -89,7 +89,7 @@ fun PianoAppScreen() {
             keys.forEach { (note, freq) ->
                 Box(
                     modifier = Modifier
-                        .size(45.dp, 150.dp)
+                        .size(40.dp, 150.dp)
                         .background(Color.White, RoundedCornerShape(4.dp))
                         .border(1.dp, Color.Black, RoundedCornerShape(4.dp))
                         .clickable { playTone(freq) },
