@@ -24,7 +24,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
-import kotlinx.coroutines.*
 import java.util.concurrent.Executors
 import kotlin.math.sin
 
@@ -58,13 +57,12 @@ class SynthEngine {
                 }
                 buffer[i] = (sin(2.0 * Math.PI * i * freq / sampleRate) * envelope * 24000).toInt().toShort()
             }
-            audioTrack.write(buffer, 0, numSamples)
+            audioTrack.write(buffer, 0, numSamples, AudioTrack.WRITE_BLOCKING)
         }
     }
 
     fun release() {
         executor.shutdown()
-        audioTrack.stop()
         audioTrack.release()
     }
 }
