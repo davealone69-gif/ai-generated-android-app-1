@@ -98,11 +98,11 @@ fun playTone(freqOfTone: Double) {
         .setBufferSizeInBytes(buffer.size)
         .build()
 
-    audioTrack.write(buffer, 0, buffer.size)
-    audioTrack.play()
-    
-    // Simple block to ensure sound finishes before cleanup
-    Thread.sleep((duration * 1000).toLong())
-    audioTrack.stop()
-    audioTrack.release()
+    try {
+        audioTrack.play()
+        audioTrack.write(buffer, 0, buffer.size)
+    } finally {
+        audioTrack.stop()
+        audioTrack.release()
+    }
 }
