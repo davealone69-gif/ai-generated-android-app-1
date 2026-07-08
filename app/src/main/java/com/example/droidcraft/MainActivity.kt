@@ -30,6 +30,9 @@ import kotlin.math.sin
 class SynthEngine {
     private val sampleRate = 44100
     private val executor = Executors.newSingleThreadExecutor()
+    
+    private val minBufferSize = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+    
     private val audioTrack: AudioTrack = AudioTrack.Builder()
         .setAudioAttributes(AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_GAME)
@@ -40,22 +43,19 @@ class SynthEngine {
             .setSampleRate(sampleRate)
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
             .build())
-        .setBufferSizeInBytes(AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT) * 2)
+        .setBufferSizeInBytes(minBufferSize)
         .build().apply { play() }
 
     fun playNote(freq: Double) {
         executor.submit {
-            val duration = 0.4
+            val duration = 0.3
             val numSamples = (duration * sampleRate).toInt()
             val buffer = ShortArray(numSamples)
-            val attack = (0.02 * sampleRate).toInt()
             
             for (i in 0 until numSamples) {
-                val envelope = when {
-                    i < attack -> i.toDouble() / attack
-                    else -> (numSamples - i).toDouble() / (numSamples - attack)
-                }
-                buffer[i] = (sin(2.0 * Math.PI * i * freq / sampleRate) * envelope * 24000).toInt().toShort()
+                // Simple ADSR envelope
+                val envelope = if (i < 1000) i / 1000.0 else 1.0 - (i.toDouble() / numSamples)
+                buffer[i] = (sin(2.0 * Math.PI * i * freq / sampleRate) * envelope * Short.MAX_VALUE * 0.5).toInt().toShort()
             }
             audioTrack.write(buffer, 0, numSamples, AudioTrack.WRITE_BLOCKING)
         }
@@ -112,7 +112,7 @@ fun PianoKey(note: String, onPlay: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxHeight()
-            .width(44.dp)
+            .width(40.dp)
             .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
             .background(color)
             .pointerInput(Unit) {
