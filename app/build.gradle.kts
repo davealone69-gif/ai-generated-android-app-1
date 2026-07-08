@@ -2,11 +2,9 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
-
 android {
     namespace = "com.example.droidcraft"
     compileSdk = 34
-
     defaultConfig {
         applicationId = "com.example.droidcraft"
         minSdk = 26
@@ -14,7 +12,6 @@ android {
         versionCode = 1
         versionName = "1.0"
     }
-
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -35,7 +32,6 @@ android {
         kotlinCompilerExtensionVersion = "1.5.8"
     }
 }
-
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
@@ -46,4 +42,5 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
+    implementation("com.google.android.material:material:1.11.0")
 }
