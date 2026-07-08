@@ -18,12 +18,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
     private val sampleRate = 44100
     private var audioTrack: AudioTrack? = null
+    private val audioLock = Any()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,16 +70,21 @@ class MainActivity : ComponentActivity() {
             generatedSnd[i] = (sin(2.0 * Math.PI * freqHz * time) * Short.MAX_VALUE).toInt().toShort()
         }
 
-        audioTrack?.let {
-            if (it.playState != AudioTrack.PLAYSTATE_PLAYING) it.play()
-            it.write(generatedSnd, 0, numSamples)
+        synchronized(audioLock) {
+            audioTrack?.let {
+                if (it.playState != AudioTrack.PLAYSTATE_PLAYING) it.play()
+                it.write(generatedSnd, 0, numSamples)
+            }
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        audioTrack?.release()
-        audioTrack = null
+        synchronized(audioLock) {
+            audioTrack?.stop()
+            audioTrack?.release()
+            audioTrack = null
+        }
     }
 }
 
