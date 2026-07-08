@@ -23,9 +23,30 @@ import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
     private val sampleRate = 44100
+    private var audioTrack: AudioTrack? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Initialize AudioTrack once
+        audioTrack = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build()
+            )
+            .setBufferSizeInBytes(sampleRate) // 1 second buffer
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -44,26 +65,16 @@ class MainActivity : ComponentActivity() {
             generatedSound[i] = (sin(2.0 * Math.PI * i / (sampleRate / frequency)) * Short.MAX_VALUE).toInt().toShort()
         }
 
-        val audioTrack = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build()
-            )
-            .setAudioFormat(
-                AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(sampleRate)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build()
-            )
-            .setBufferSizeInBytes(numSamples * 2)
-            .setTransferMode(AudioTrack.MODE_STATIC)
-            .build()
+        audioTrack?.apply {
+            if (playState != AudioTrack.PLAYSTATE_PLAYING) play()
+            write(generatedSound, 0, numSamples)
+        }
+    }
 
-        audioTrack.write(generatedSound, 0, numSamples)
-        audioTrack.play()
+    override fun onDestroy() {
+        super.onDestroy()
+        audioTrack?.release()
+        audioTrack = null
     }
 }
 
