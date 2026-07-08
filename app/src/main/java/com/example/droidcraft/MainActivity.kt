@@ -61,13 +61,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun playTone(freqHz: Double) {
-        val durationMs = 300
+        val durationMs = 200
         val numSamples = (durationMs * sampleRate / 1000)
         val generatedSnd = ShortArray(numSamples)
         
         for (i in 0 until numSamples) {
             val time = i.toDouble() / sampleRate
-            generatedSnd[i] = (sin(2.0 * Math.PI * freqHz * time) * Short.MAX_VALUE).toInt().toShort()
+            val angle = 2.0 * Math.PI * freqHz * time
+            generatedSnd[i] = (sin(angle) * Short.MAX_VALUE).toInt().toShort()
         }
 
         synchronized(audioLock) {
