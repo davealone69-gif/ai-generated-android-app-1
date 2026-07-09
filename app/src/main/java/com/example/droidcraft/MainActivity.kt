@@ -24,16 +24,17 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            PianoApp()
+            PianoAppScreen()
         }
     }
 }
 
 @Composable
-fun PianoApp() {
-    val scope = rememberCoroutineScope()
+fun PianoAppScreen() {
+    val coroutineScope = rememberCoroutineScope()
+    val sampleRate = 44100
     
-    val notes = listOf(
+    val notes = mapOf(
         "C" to 261.63,
         "D" to 293.66,
         "E" to 329.63,
@@ -44,53 +45,44 @@ fun PianoApp() {
     )
 
     Column(
-        modifier = Modifier.fillMaxSize().background(Color.Black).padding(16.dp),
+        modifier = Modifier.fillMaxSize().padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text(
-            text = "Compose Synth Piano",
-            color = Color.White,
-            style = MaterialTheme.typography.headlineMedium
-        )
+        Text("DroidCraft Piano", style = MaterialTheme.typography.headlineMedium)
         Spacer(modifier = Modifier.height(32.dp))
+        
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             notes.forEach { (name, freq) ->
-                PianoKey(name) {
-                    scope.launch(Dispatchers.Default) {
-                        playTone(freq)
-                    }
+                Box(
+                    modifier = Modifier
+                        .size(45.dp, 150.dp)
+                        .background(Color.White, RoundedCornerShape(4.dp))
+                        .clickable {
+                            coroutineScope.launch(Dispatchers.Default) {
+                                playTone(freq, sampleRate)
+                            }
+                        },
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    Text(name, modifier = Modifier.padding(bottom = 8.dp))
                 }
             }
         }
     }
 }
 
-@Composable
-fun PianoKey(label: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(45.dp, 150.dp)
-            .background(Color.White, RoundedCornerShape(4.dp))
-            .clickable { onClick() },
-        contentAlignment = Alignment.BottomCenter
-    ) {
-        Text(label, color = Color.Black, modifier = Modifier.padding(bottom = 8.dp))
-    }
-}
-
-private fun playTone(freq: Double) {
+fun playTone(freqHz: Double, sampleRate: Int) {
     val durationMs = 300
-    val sampleRate = 44100
-    val numSamples = durationMs * sampleRate / 1000
+    val numSamples = (durationMs * sampleRate) / 1000
     val sample = DoubleArray(numSamples)
-    val generatedSound = ByteArray(2 * numSamples)
+    val generatedSnd = ByteArray(2 * numSamples)
 
     for (i in 0 until numSamples) {
-        sample[i] = sin(2.0 * Math.PI * i.toDouble() / (sampleRate / freq))
+        sample[i] = sin(2.0 * Math.PI * i.toDouble() / (sampleRate.toDouble() / freqHz))
         val pcm = (sample[i] * 32767).toInt()
-        generatedSound[2 * i] = (pcm and 0xff).toByte()
-        generatedSound[2 * i + 1] = ((pcm shr 8) and 0xff).toByte()
+        generatedSnd[2 * i] = (pcm and 0x00ff).toByte()
+        generatedSnd[2 * i + 1] = ((pcm and 0xff00) ushr 8).toByte()
     }
 
     val audioTrack = AudioTrack(
@@ -98,10 +90,10 @@ private fun playTone(freq: Double) {
         sampleRate,
         AudioFormat.CHANNEL_OUT_MONO,
         AudioFormat.ENCODING_PCM_16BIT,
-        generatedSound.size,
+        generatedSnd.size,
         AudioTrack.MODE_STATIC
     )
-    audioTrack.write(generatedSound, 0, generatedSound.size)
+    audioTrack.write(generatedSnd, 0, generatedSnd.size)
     audioTrack.play()
     audioTrack.release()
 }
