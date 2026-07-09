@@ -18,11 +18,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import java.util.concurrent.Executors
 import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
     private val sampleRate = 44100
     private var audioTrack: AudioTrack? = null
+    private val executor = Executors.newSingleThreadExecutor()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,7 +57,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    PianoScreen { frequency -> playTone(frequency) }
+                    PianoScreen { frequency -> 
+                        executor.execute { playTone(frequency) }
+                    }
                 }
             }
         }
@@ -77,6 +81,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        executor.shutdown()
         audioTrack?.release()
         audioTrack = null
     }
@@ -84,7 +89,6 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun PianoScreen(onPlayTone: (Double) -> Unit) {
-    val scope = rememberCoroutineScope()
     val notes = listOf(
         "C" to 261.63, "D" to 293.66, "E" to 329.63, 
         "F" to 349.23, "G" to 392.00, "A" to 440.00, "B" to 493.88
@@ -104,7 +108,7 @@ fun PianoScreen(onPlayTone: (Double) -> Unit) {
                         .size(45.dp, 150.dp)
                         .background(Color.White)
                         .border(1.dp, Color.Black)
-                        .clickable { scope.launch(Dispatchers.IO) { onPlayTone(freq) } },
+                        .clickable { onPlayTone(freq) },
                     contentAlignment = Alignment.BottomCenter
                 ) {
                     Text(text = name, modifier = Modifier.padding(bottom = 8.dp), color = Color.Black)
