@@ -5,7 +5,7 @@
     <application
         android:allowBackup="true"
         android:label="DroidCraft App"
-        android:theme="@style/Theme.Material3.DayNight.NoActionBar">
+        android:theme="@style/Theme.DroidCraft">
         <activity
             android:name=".MainActivity"
             android:exported="true">
