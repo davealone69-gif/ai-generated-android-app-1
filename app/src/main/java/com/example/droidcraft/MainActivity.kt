@@ -1,28 +1,112 @@
 package com.example.droidcraft
 
 import android.media.AudioFormat
-import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectPressAndRelease
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.font.FontWeight
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlin.math.PI
-import kotlin.math.pow
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.math.sin
+
+// Constants for audio synthesis
+private const val SAMPLE_RATE = 44100 // samples per second
+private const val DURATION_MS = 200 // milliseconds for each note
+private const val VOLUME = 0.5f // Master volume, 0.0 to 1.0
+
+/**
+ * A simple sine wave synthesizer that uses AudioTrack to play generated tones.
+ * This class should be remembered and its resources released with DisposableEffect.
+ */
+class SimpleSineSynthesizer {
+    private var audioTrack: AudioTrack? = null
+    private val bufferSize = AudioTrack.getMinBufferSize(
+        SAMPLE_RATE,
+        AudioFormat.CHANNEL_OUT_MONO,
+        AudioFormat.ENCODING_PCM_16BIT
+    ) * 2 // Double buffer size for robustness
+    private val audioBuffer = ByteBuffer.allocateDirect(bufferSize).order(ByteOrder.LITTLE_ENDIAN)
+
+    init {
+        initAudioTrack()
+    }
+
+    private fun initAudioTrack() {
+        audioTrack = AudioTrack.Builder()
+            .setAudioAttributes(
+                android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(SAMPLE_RATE)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build()
+            )
+            .setBufferSizeInBytes(bufferSize)
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+
+        // Start playback
+        audioTrack?.play()
+    }
+
+    /**
+     * Generates a sine wave for the given frequency and plays it using AudioTrack.
+     * The generation happens on a background coroutine to avoid blocking the UI.
+     * @param frequency The frequency of the note in Hz.
+     * @param scope The CoroutineScope to launch the sound generation task.
+     */
+    fun playNote(frequency: Double, scope: CoroutineScope) {
+        scope.launch(Dispatchers.Default) {
+            val numSamples = (DURATION_MS * SAMPLE_RATE / 1000).toInt()
+            val samples = ShortArray(numSamples)
+            for (i in 0 until numSamples) {
+                // Generate sine wave sample and scale it to 16-bit PCM range
+                val sample = (sin(2 * Math.PI * frequency * i / SAMPLE_RATE) * Short.MAX_VALUE * VOLUME).toInt().toShort()
+                samples[i] = sample
+            }
+
+            // Write samples to the AudioTrack buffer
+            audioBuffer.clear()
+            audioBuffer.asShortBuffer().put(samples)
+            
+            // Ensure audioTrack is not null and is playing before writing
+            audioTrack?.apply {
+                if (playState == AudioTrack.PLAYSTATE_PLAYING) {
+                    // Write size in bytes (2 bytes per Short)
+                    write(audioBuffer, numSamples * 2, AudioTrack.WRITE_BLOCKING)
+                }
+            }
+        }
+    }
+
+    /**
+     * Releases the AudioTrack resources. Should be called when the synthesizer is no longer needed.
+     */
+    fun release() {
+        audioTrack?.stop()
+        audioTrack?.release()
+        audioTrack = null
+    }
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -33,156 +117,110 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// --- Sound Synthesis Logic ---
-object AudioEngine {
-    private const val SAMPLE_RATE = 44100
-    private const val BUFFER_SIZE = SAMPLE_RATE / 4 // 0.25 seconds of audio data
-    private const val AMPLITUDE = 32767.0 // Max for 16-bit PCM
-
-    private var audioTrack: AudioTrack? = null
-    private var playingThread: Thread? = null
-    @Volatile private var isPlaying = false
-
-    // Function to get frequency from MIDI note number
-    fun midiNoteToFrequency(midiNote: Int): Float {
-        return 440f * (2.0.pow((midiNote - 69) / 12.0)).toFloat()
-    }
-
-    fun startNote(frequency: Float) {
-        if (isPlaying) {
-            stopNote() // Stop any currently playing note before starting a new one
-        }
-
-        isPlaying = true
-        playingThread = Thread {
-            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
-
-            audioTrack = AudioTrack(
-                AudioManager.STREAM_MUSIC,
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_OUT_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                BUFFER_SIZE * 2, // Multiply by 2 for 16-bit stereo (or mono)
-                AudioTrack.MODE_STREAM
-            )
-            audioTrack?.play()
-
-            var phase = 0.0 // To maintain phase continuity
-            val samples = ShortArray(BUFFER_SIZE)
-
-            while (isPlaying) {
-                for (i in 0 until BUFFER_SIZE) {
-                    // Generate a sine wave sample
-                    val sample = (AMPLITUDE * sin(2 * PI * frequency * (phase / SAMPLE_RATE))).toFloat()
-                    samples[i] = sample.toInt().toShort()
-                    phase++
-                }
-                audioTrack?.write(samples, 0, BUFFER_SIZE)
-            }
-        }
-        playingThread?.start()
-    }
-
-    fun stopNote() {
-        isPlaying = false
-        playingThread?.join() // Wait for the thread to finish its current loop
-        playingThread = null
-        audioTrack?.stop()
-        audioTrack?.release()
-        audioTrack = null
-    }
-}
-
-// --- Composable UI ---
+@OptIn(ExperimentalMaterial3Api::class) // For TopAppBar
 @Composable
 fun MainAppScreen() {
-    val coroutineScope = rememberCoroutineScope()
-    MaterialTheme { // Use MaterialTheme for consistent styling
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.background
-        ) {
-            Column(
-                modifier = Modifier.fillMaxSize().padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Text(
-                    text = "Compose Piano",
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.headlineLarge,
-                    modifier = Modifier.padding(bottom = 24.dp)
-                )
+    // Remember the synthesizer instance across recompositions
+    val synthesizer = remember { SimpleSineSynthesizer() }
+    // Coroutine scope for launching sound generation tasks
+    val scope = rememberCoroutineScope() 
 
-                PianoKeyboard(coroutineScope)
+    // Release synthesizer resources when the Composable leaves the composition
+    DisposableEffect(Unit) {
+        onDispose {
+            synthesizer.release()
+        }
+    }
+
+    // Frequencies for a simple piano scale with some sharps
+    val noteFrequencies = remember {
+        listOf(
+            "C4" to 261.63, // C4
+            "C#4" to 277.18, // C#4
+            "D4" to 293.66, // D4
+            "D#4" to 311.13, // D#4
+            "E4" to 329.63, // E4
+            "F4" to 349.23, // F4
+            "F#4" to 369.99, // F#4
+            "G4" to 392.00, // G4
+            "G#4" to 415.30, // G#4
+            "A4" to 440.00, // A4
+            "A#4" to 466.16, // A#4
+            "B4" to 493.88, // B4
+            "C5" to 523.25  // C5
+        )
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(title = { Text("DroidCraft Piano", fontWeight = FontWeight.Bold) })
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = "Tap a key to play a note!",
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.padding(bottom = 24.dp)
+            )
+
+            // Piano Keys Layout
+            // For simplicity, keys are arranged in a single row.
+            // Black keys are visually shorter.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .wrapContentHeight()
+                    .padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.SpaceAround,
+                verticalAlignment = Alignment.Bottom // Align keys to the bottom
+            ) {
+                noteFrequencies.forEach { (noteName, frequency) ->
+                    PianoKey(noteName) {
+                        synthesizer.playNote(frequency, scope)
+                    }
+                }
             }
         }
     }
 }
 
+/**
+ * A Composable representing a single piano key.
+ * @param noteName The name of the note (e.g., "C4", "C#4").
+ * @param onClick Lambda to be invoked when the key is clicked.
+ */
 @Composable
-fun PianoKeyboard(coroutineScope: CoroutineScope) {
-    // Define MIDI notes for a simple scale (C4 to C5)
-    val midiNotes = remember {
-        listOf(60, 62, 64, 65, 67, 69, 71, 72) // C4, D4, E4, F4, G4, A4, B4, C5
-    }
-
-    Row(
-        modifier = Modifier.fillMaxWidth().height(200.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        midiNotes.forEach { midiNote ->
-            val frequency = AudioEngine.midiNoteToFrequency(midiNote)
-            PianoKey(
-                midiNote = midiNote,
-                frequency = frequency,
-                coroutineScope = coroutineScope
-            )
-        }
-    }
-}
-
-@Composable
-fun PianoKey(midiNote: Int, frequency: Float, coroutineScope: CoroutineScope) {
-    var isPressed by remember { mutableStateOf(false) }
-
-    val backgroundColor = if (isPressed) MaterialTheme.colorScheme.primary else Color.White
-    val contentColor = if (isPressed) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+fun RowScope.PianoKey(noteName: String, onClick: () -> Unit) {
+    val isBlackKey = noteName.contains("#")
+    val keyColor = if (isBlackKey) Color.Black else Color.White
+    val textColor = if (isBlackKey) Color.White else Color.Black
 
     Card(
         modifier = Modifier
-            .weight(1f)
-            .fillMaxHeight()
-            .padding(4.dp)
-            .pointerInput(Unit) {
-                detectPressAndRelease(
-                    onPress = { offset ->
-                        isPressed = true
-                        coroutineScope.launch(Dispatchers.Default) {
-                            AudioEngine.startNote(frequency)
-                        }
-                    },
-                    onRelease = {
-                        isPressed = false
-                        coroutineScope.launch(Dispatchers.Default) {
-                            AudioEngine.stopNote()
-                        }
-                    }
-                )
-            },
-        colors = CardDefaults.cardColors(containerColor = backgroundColor),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (isPressed) 0.dp else 4.dp),
-        border = if (isPressed) null else CardDefaults.outlinedCardBorder()
+            .weight(1f) // Distribute keys evenly in the row
+            .height(if (isBlackKey) 120.dp else 180.dp) // Black keys are shorter
+            .padding(horizontal = 2.dp, vertical = 4.dp) // Spacing between keys
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = keyColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        border = if (!isBlackKey) BorderStroke(1.dp, Color.LightGray) else null
     ) {
         Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.BottomCenter
         ) {
             Text(
-                text = "C${(midiNote - 60)/12 + 4}" + if (midiNote % 12 == 1 || midiNote % 12 == 3 || midiNote % 12 == 6 || midiNote % 12 == 8 || midiNote % 12 == 10) "#" else "",
+                text = noteName,
+                color = textColor,
                 style = MaterialTheme.typography.bodyMedium,
-                color = contentColor,
+                fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(bottom = 8.dp)
             )
         }
