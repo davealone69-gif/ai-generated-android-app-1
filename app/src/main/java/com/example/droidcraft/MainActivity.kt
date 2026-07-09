@@ -7,7 +7,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectPressAndRelease
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -16,286 +15,176 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.zIndex
-import kotlinx.coroutines.CoroutineScope
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.PI
+import kotlin.math.pow
 import kotlin.math.sin
 
-/**
- * [AudioPlayer] class for custom sound synthesis using Android's AudioTrack.
- * It generates a sine wave at a specified frequency.
- */
-class AudioPlayer {
-    private var audioTrack: AudioTrack? = null
-    @Volatile private var isPlaying = false
-    @Volatile private var currentFrequency = 0.0
-
-    private val sampleRate = 44100 // Samples per second (Hz)
-    private val minBufferSize = AudioTrack.getMinBufferSize(
-        sampleRate,
-        AudioFormat.CHANNEL_OUT_MONO,
-        AudioFormat.ENCODING_PCM_16BIT
-    )
-    // Ensure buffer is large enough for continuous playback, at least 1/4 second of audio
-    private val bufferSize = minBufferSize.coerceAtLeast(sampleRate / 4)
-
-    /**
-     * Plays a sine wave tone at the given frequency.
-     * If a tone is already playing, it will stop it and start the new one,
-     * unless the same frequency is requested.
-     */
-    fun playTone(frequency: Double) {
-        // If the same tone is already playing, do nothing
-        if (isPlaying && currentFrequency == frequency) return
-
-        stopTone() // Stop any currently playing tone to avoid multiple audio streams
-
-        currentFrequency = frequency
-        isPlaying = true
-
-        CoroutineScope(Dispatchers.Default).launch {
-            audioTrack = AudioTrack(
-                AudioManager.STREAM_MUSIC,
-                sampleRate,
-                AudioFormat.CHANNEL_OUT_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                bufferSize,
-                AudioTrack.MODE_STREAM
-            ).apply { play() } // Initialize and start playback
-
-            val buffer = ShortArray(bufferSize / 2) // For 16-bit PCM, 2 bytes per sample means buffer.size / 2 samples
-            var angle = 0.0 // Current phase angle for sine wave generation
-            val twoPi = 2 * Math.PI
-
-            // Loop to continuously generate and play audio samples
-            while (isPlaying && currentFrequency == frequency) {
-                for (i in buffer.indices) {
-                    val sample = (sin(angle) * Short.MAX_VALUE).toInt().toShort()
-                    buffer[i] = sample
-                    // Increment angle based on frequency and sample rate
-                    angle += twoPi * frequency / sampleRate
-                    // Keep angle within 0 to 2PI to prevent precision issues over long periods
-                    if (angle > twoPi) angle -= twoPi
-                }
-                audioTrack?.write(buffer, 0, buffer.size)
-            }
-
-            // Once the loop exits (isPlaying becomes false or frequency changes),
-            // stop and release the AudioTrack resources
-            withContext(Dispatchers.Main) {
-                audioTrack?.stop()
-                audioTrack?.release()
-                audioTrack = null
-            }
-        }
-    }
-
-    /**
-     * Stops the currently playing tone.
-     */
-    fun stopTone() {
-        if (!isPlaying) return // No tone is playing
-        isPlaying = false
-        currentFrequency = 0.0 // Reset frequency
-        // The active coroutine will detect `isPlaying = false` and terminate itself.
-    }
-}
-
-
-/**
- * Main Activity for the DroidCraft Piano app.
- */
 class MainActivity : ComponentActivity() {
-    // Instantiate our custom audio player. This instance will manage sound synthesis.
-    private val audioPlayer = AudioPlayer()
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            // Apply MaterialTheme to the entire application for consistent styling
-            MaterialTheme {
-                MainAppScreen(audioPlayer)
-            }
+            MainAppScreen()
         }
     }
+}
 
-    override fun onDestroy() {
-        super.onDestroy()
-        // Ensure audio stops and resources are released when the activity is destroyed
-        audioPlayer.stopTone()
+// --- Sound Synthesis Logic ---
+object AudioEngine {
+    private const val SAMPLE_RATE = 44100
+    private const val BUFFER_SIZE = SAMPLE_RATE / 4 // 0.25 seconds of audio data
+    private const val AMPLITUDE = 32767.0 // Max for 16-bit PCM
+
+    private var audioTrack: AudioTrack? = null
+    private var playingThread: Thread? = null
+    @Volatile private var isPlaying = false
+
+    // Function to get frequency from MIDI note number
+    fun midiNoteToFrequency(midiNote: Int): Float {
+        return 440f * (2.0.pow((midiNote - 69) / 12.0)).toFloat()
+    }
+
+    fun startNote(frequency: Float) {
+        if (isPlaying) {
+            stopNote() // Stop any currently playing note before starting a new one
+        }
+
+        isPlaying = true
+        playingThread = Thread {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+
+            audioTrack = AudioTrack(
+                AudioManager.STREAM_MUSIC,
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                BUFFER_SIZE * 2, // Multiply by 2 for 16-bit stereo (or mono)
+                AudioTrack.MODE_STREAM
+            )
+            audioTrack?.play()
+
+            var phase = 0.0 // To maintain phase continuity
+            val samples = ShortArray(BUFFER_SIZE)
+
+            while (isPlaying) {
+                for (i in 0 until BUFFER_SIZE) {
+                    // Generate a sine wave sample
+                    val sample = (AMPLITUDE * sin(2 * PI * frequency * (phase / SAMPLE_RATE))).toFloat()
+                    samples[i] = sample.toInt().toShort()
+                    phase++
+                }
+                audioTrack?.write(samples, 0, BUFFER_SIZE)
+            }
+        }
+        playingThread?.start()
+    }
+
+    fun stopNote() {
+        isPlaying = false
+        playingThread?.join() // Wait for the thread to finish its current loop
+        playingThread = null
+        audioTrack?.stop()
+        audioTrack?.release()
+        audioTrack = null
     }
 }
 
-/**
- * Enum defining standard piano notes with their frequencies and key type (white/black).
- * Frequencies are based on the equal-tempered scale, A4 = 440 Hz.
- */
-enum class PianoNote(val frequency: Double, val isBlackKey: Boolean = false) {
-    C4(261.63),
-    Db4(277.18, true), // D-flat, a black key
-    D4(293.66),
-    Eb4(311.13, true), // E-flat, a black key
-    E4(329.63),
-    F4(349.23),
-    Gb4(369.99, true), // G-flat, a black key
-    G4(392.00),
-    Ab4(415.30, true), // A-flat, a black key
-    A4(440.00),
-    Bb4(466.16, true), // B-flat, a black key
-    B4(493.88)
-}
-
-/**
- * The main UI screen for the DroidCraft Piano application.
- * Displays a single octave piano keyboard.
- */
+// --- Composable UI ---
 @Composable
-fun MainAppScreen(audioPlayer: AudioPlayer) {
-    // List of white keys in a single octave
-    val whiteKeys = listOf(
-        PianoNote.C4, PianoNote.D4, PianoNote.E4, PianoNote.F4,
-        PianoNote.G4, PianoNote.A4, PianoNote.B4
-    )
-    // List representing the layout of black keys relative to white keys.
-    // `null` entries denote a gap where no black key exists (e.g., between E and F).
-    val blackKeyNotesLayout = listOf(
-        PianoNote.Db4, // Black key after C4
-        PianoNote.Eb4, // Black key after D4
-        null,          // No black key after E4 (E-F interval)
-        PianoNote.Gb4, // Black key after F4
-        PianoNote.Ab4, // Black key after G4
-        PianoNote.Bb4, // Black key after A4
-        null           // No black key after B4 (B-C interval)
-    )
-
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(
-            text = "DroidCraft Piano",
-            fontWeight = FontWeight.Bold,
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(bottom = 24.dp)
-        )
-
-        // Use a Box to layer white and black keys on top of each other
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.95f) // Piano occupies 95% of the screen width
-                .aspectRatio(3.5f) // Define the overall aspect ratio of the keyboard area
-                .align(Alignment.CenterHorizontally)
+fun MainAppScreen() {
+    val coroutineScope = rememberCoroutineScope()
+    MaterialTheme { // Use MaterialTheme for consistent styling
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background
         ) {
-            // Layer 1: White keys, laid out horizontally
-            Row(modifier = Modifier.fillMaxSize()) {
-                whiteKeys.forEach { note ->
-                    PianoKey(
-                        note = note,
-                        audioPlayer = audioPlayer,
-                        modifier = Modifier
-                            .weight(1f) // Each white key takes equal horizontal space
-                            .fillMaxHeight()
-                            .border(1.dp, Color.LightGray) // Visual border for white keys
-                    )
-                }
-            }
-
-            // Layer 2: Black keys, positioned on top of the white keys
-            // BoxWithConstraints is used to dynamically calculate key sizes and positions
-            BoxWithConstraints(
-                modifier = Modifier.fillMaxSize()
+            Column(
+                modifier = Modifier.fillMaxSize().padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
             ) {
-                val whiteKeyWidth = maxWidth / whiteKeys.size // Calculated width of a single white key
-                val blackKeyWidth = whiteKeyWidth * 0.6f      // Black keys are 60% of white key width
-                val blackKeyHeight = maxHeight * 0.6f         // Black keys are 60% of total keyboard height
+                Text(
+                    text = "Compose Piano",
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.headlineLarge,
+                    modifier = Modifier.padding(bottom = 24.dp)
+                )
 
-                // Iterate through the black key layout to place each black key
-                blackKeyNotesLayout.forEachIndexed { index, note ->
-                    if (note != null) {
-                        // Calculate the horizontal offset for each black key.
-                        // It should be centered over the division line between `whiteKeys[index]` and `whiteKeys[index+1]`.
-                        // `(index + 1) * whiteKeyWidth` gives the position of the right edge of `whiteKeys[index]`.
-                        // Subtracting half the `blackKeyWidth` centers it over that edge.
-                        val offsetFromLeft = (index + 1) * whiteKeyWidth - (blackKeyWidth / 2)
-
-                        Box(
-                            modifier = Modifier
-                                .offset(x = offsetFromLeft, y = 0.dp) // Position from left and top
-                                .width(blackKeyWidth)
-                                .height(blackKeyHeight)
-                                .zIndex(1f) // Ensure black keys are rendered on top of white keys
-                        ) {
-                            PianoKey(
-                                note = note,
-                                audioPlayer = audioPlayer,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .border(1.dp, Color.DarkGray) // Visual border for black keys
-                            )
-                        }
-                    }
-                }
+                PianoKeyboard(coroutineScope)
             }
         }
     }
 }
 
-/**
- * Composable function for a single piano key (either white or black).
- * Handles touch input to play and stop tones.
- */
 @Composable
-fun PianoKey(note: PianoNote, audioPlayer: AudioPlayer, modifier: Modifier) {
-    val keyColor = if (note.isBlackKey) Color.Black else Color.White
-    // Visual feedback color when the key is pressed
-    val pressedColor = if (note.isBlackKey) Color.DarkGray else Color.LightGray.copy(alpha = 0.5f)
+fun PianoKeyboard(coroutineScope: CoroutineScope) {
+    // Define MIDI notes for a simple scale (C4 to C5)
+    val midiNotes = remember {
+        listOf(60, 62, 64, 65, 67, 69, 71, 72) // C4, D4, E4, F4, G4, A4, B4, C5
+    }
 
-    // State to track if the key is currently being pressed
+    Row(
+        modifier = Modifier.fillMaxWidth().height(200.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        midiNotes.forEach { midiNote ->
+            val frequency = AudioEngine.midiNoteToFrequency(midiNote)
+            PianoKey(
+                midiNote = midiNote,
+                frequency = frequency,
+                coroutineScope = coroutineScope
+            )
+        }
+    }
+}
+
+@Composable
+fun PianoKey(midiNote: Int, frequency: Float, coroutineScope: CoroutineScope) {
     var isPressed by remember { mutableStateOf(false) }
 
-    Surface(
-        modifier = modifier
-            .pointerInput(Unit) { // Use pointerInput to detect press and release gestures
+    val backgroundColor = if (isPressed) MaterialTheme.colorScheme.primary else Color.White
+    val contentColor = if (isPressed) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+
+    Card(
+        modifier = Modifier
+            .weight(1f)
+            .fillMaxHeight()
+            .padding(4.dp)
+            .pointerInput(Unit) {
                 detectPressAndRelease(
-                    onPress = {
+                    onPress = { offset ->
                         isPressed = true
-                        audioPlayer.playTone(note.frequency)
+                        coroutineScope.launch(Dispatchers.Default) {
+                            AudioEngine.startNote(frequency)
+                        }
                     },
                     onRelease = {
                         isPressed = false
-                        audioPlayer.stopTone()
-                    },
-                    onCancel = { // Handle cases where touch is cancelled (e.g., finger slides off)
-                        isPressed = false
-                        audioPlayer.stopTone()
+                        coroutineScope.launch(Dispatchers.Default) {
+                            AudioEngine.stopNote()
+                        }
                     }
                 )
             },
-        shape = MaterialTheme.shapes.extraSmall, // Slightly rounded corners for keys
-        color = keyColor // Base color of the key
+        colors = CardDefaults.cardColors(containerColor = backgroundColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isPressed) 0.dp else 4.dp),
+        border = if (isPressed) null else CardDefaults.outlinedCardBorder()
     ) {
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                // Apply a semi-transparent overlay when the key is pressed for visual feedback
-                .background(if (isPressed) pressedColor else Color.Transparent)
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.BottomCenter
         ) {
-            // Display note name on white keys for identification
-            if (!note.isBlackKey) {
-                Text(
-                    text = note.name.replace("4", ""), // Display "C" instead of "C4"
-                    color = Color.DarkGray,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter) // Position text at the bottom center
-                        .padding(bottom = 4.dp)
-                )
-            }
+            Text(
+                text = "C${(midiNote - 60)/12 + 4}" + if (midiNote % 12 == 1 || midiNote % 12 == 3 || midiNote % 12 == 6 || midiNote % 12 == 8 || midiNote % 12 == 10) "#" else "",
+                style = MaterialTheme.typography.bodyMedium,
+                color = contentColor,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
         }
     }
 }
