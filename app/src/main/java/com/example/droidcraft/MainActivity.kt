@@ -7,7 +7,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,7 +31,9 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun PianoAppScreen() {
-    val notes = mapOf(
+    val coroutineScope = rememberCoroutineScope()
+    val sampleRate = 44100
+    val pianoNotes = mapOf(
         "C" to 261.63,
         "D" to 293.66,
         "E" to 329.63,
@@ -42,64 +43,60 @@ fun PianoAppScreen() {
         "B" to 493.88
     )
 
-    val scope = rememberCoroutineScope()
+    fun playTone(freqOfTone: Double) {
+        coroutineScope.launch(Dispatchers.IO) {
+            val duration = 0.5
+            val numSamples = (duration * sampleRate).toInt()
+            val sample = DoubleArray(numSamples)
+            val generatedSnd = ByteArray(2 * numSamples)
+
+            for (i in 0 until numSamples) {
+                sample[i] = sin(2.0 * Math.PI * i / (sampleRate / freqOfTone))
+                val pcm = (sample[i] * 32767).toInt()
+                generatedSnd[2 * i] = (pcm and 0xff).toByte()
+                generatedSnd[2 * i + 1] = (pcm shr 8 and 0xff).toByte()
+            }
+
+            val audioTrack = AudioTrack(
+                AudioManager.STREAM_MUSIC,
+                sampleRate,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                generatedSnd.size,
+                AudioTrack.MODE_STATIC
+            )
+            audioTrack.write(generatedSnd, 0, generatedSnd.size)
+            audioTrack.play()
+        }
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
-        Text("Simple Synth Piano", style = MaterialTheme.typography.headlineMedium)
+        Text("Compose Piano", style = MaterialTheme.typography.headlineMedium)
         Spacer(modifier = Modifier.height(32.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            notes.forEach { (note, freq) ->
-                PianoKey(note) {
-                    scope.launch(Dispatchers.IO) {
-                        playTone(freq)
-                    }
-                }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            pianoNotes.forEach { (note, freq) ->
+                PianoKey(note) { playTone(freq) }
             }
         }
     }
 }
 
 @Composable
-fun PianoKey(label: String, onClick: () -> Unit) {
+fun PianoKey(note: String, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .size(40.dp, 120.dp)
             .background(Color.White, RoundedCornerShape(4.dp))
-            .border(1.dp, Color.Black, RoundedCornerShape(4.dp))
             .clickable { onClick() },
         contentAlignment = Alignment.BottomCenter
     ) {
-        Text(label, modifier = Modifier.padding(bottom = 8.dp))
+        Text(note, modifier = Modifier.padding(bottom = 8.dp))
     }
-}
-
-fun playTone(freqOfTone: Double) {
-    val durationMs = 300
-    val sampleRate = 44100
-    val numSamples = durationMs * sampleRate / 1000
-    val generatedSnd = DoubleArray(numSamples)
-    val buffer = ByteArray(numSamples * 2)
-
-    for (i in 0 until numSamples) {
-        generatedSnd[i] = sin(2.0 * Math.PI * i / (sampleRate / freqOfTone))
-        val pcm = (generatedSnd[i] * 32767).toInt()
-        buffer[2 * i] = (pcm and 0xff).toByte()
-        buffer[2 * i + 1] = (pcm shr 8 and 0xff).toByte()
-    }
-
-    val audioTrack = AudioTrack(
-        AudioManager.STREAM_MUSIC,
-        sampleRate,
-        AudioFormat.CHANNEL_OUT_MONO,
-        AudioFormat.ENCODING_PCM_16BIT,
-        numSamples * 2,
-        AudioTrack.MODE_STATIC
-    )
-    audioTrack.write(buffer, 0, buffer.size)
-    audioTrack.play()
-    audioTrack.release()
 }
