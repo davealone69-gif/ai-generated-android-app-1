@@ -21,100 +21,88 @@ import kotlinx.coroutines.launch
 import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
-    private val sampleRate = 44100
-    private var audioTrack: AudioTrack? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        val bufferSize = AudioTrack.getMinBufferSize(
-            sampleRate,
-            AudioFormat.CHANNEL_OUT_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
-        )
-
-        audioTrack = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build()
-            )
-            .setAudioFormat(
-                AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(sampleRate)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build()
-            )
-            .setBufferSizeInBytes(bufferSize)
-            .build()
-
         setContent {
-            PianoScreen { frequency -> playTone(frequency) }
+            MaterialTheme {
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    PianoAppScreen()
+                }
+            }
         }
-    }
-
-    private fun playTone(freqHz: Double) {
-        Thread {
-            val durationMs = 300
-            val numSamples = (durationMs * sampleRate / 1000)
-            val generatedSnd = ShortArray(numSamples)
-            for (i in 0 until numSamples) {
-                // Sine wave synthesis
-                generatedSnd[i] = (sin(2.0 * Math.PI * i / (sampleRate / freqHz)) * 32767).toInt().toShort()
-            }
-            audioTrack?.apply {
-                if (playState != AudioTrack.PLAYSTATE_PLAYING) play()
-                write(generatedSnd, 0, numSamples)
-            }
-        }.start()
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        audioTrack?.release()
     }
 }
 
 @Composable
-fun PianoScreen(onPlay: (Double) -> Unit) {
-    val notes = listOf(
-        "C" to 261.63,
-        "D" to 293.66,
-        "E" to 329.63,
-        "F" to 349.23,
-        "G" to 392.00,
-        "A" to 440.00,
-        "B" to 493.88
+fun PianoAppScreen() {
+    val coroutineScope = rememberCoroutineScope()
+    val sampleRate = 44100
+    val pianoKeys = listOf(
+        261.63f to "C", 293.66f to "D", 329.63f to "E", 349.23f to "F",
+        392.00f to "G", 440.00f to "A", 493.88f to "B", 523.25f to "C#"
     )
 
     Column(
-        modifier = Modifier.fillMaxSize().background(Color(0xFF121212)),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
-        Text("Compose Piano", color = Color.White, style = MaterialTheme.typography.headlineMedium)
-        Spacer(modifier = Modifier.height(40.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            notes.forEach { (name, freq) ->
-                PianoKey(name) { onPlay(freq) }
+        Text("Compose Piano", style = MaterialTheme.typography.headlineMedium)
+        Spacer(modifier = Modifier.height(32.dp))
+        Row(modifier = Modifier.fillMaxWidth().height(200.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+            pianoKeys.forEach { (freq, label) ->
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .padding(2.dp)
+                        .background(Color.DarkGray, RoundedCornerShape(8.dp))
+                        .clickable {
+                            coroutineScope.launch(Dispatchers.Default) {
+                                playTone(freq, sampleRate)
+                            }
+                        },
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    Text(label, color = Color.White, modifier = Modifier.padding(bottom = 16.dp))
+                }
             }
         }
     }
 }
 
-@Composable
-fun PianoKey(label: String, onClick: () -> Unit) {
-    Surface(
-        modifier = Modifier
-            .size(45.dp, 150.dp)
-            .clickable { onClick() },
-        color = Color.White,
-        shape = RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp)
-    ) {
-        Box(contentAlignment = Alignment.BottomCenter, modifier = Modifier.padding(bottom = 10.dp)) {
-            Text(label, color = Color.Black)
-        }
+private fun playTone(freq: Float, sampleRate: Int) {
+    val durationMs = 300
+    val numSamples = (durationMs * sampleRate) / 1000
+    val sample = ShortArray(numSamples)
+    
+    for (i in 0 until numSamples) {
+        sample[i] = (sin(2.0 * Math.PI * i / (sampleRate / freq)) * 32767.0).toInt().toShort()
     }
+
+    val audioTrack = AudioTrack.Builder()
+        .setAudioAttributes(AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+            .build())
+        .setAudioFormat(AudioFormat.Builder()
+            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+            .setSampleRate(sampleRate)
+            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+            .build())
+        .setBufferSizeInBytes(numSamples * 2)
+        .setTransferMode(AudioTrack.MODE_STATIC)
+        .build()
+    
+    audioTrack.write(sample, 0, numSamples)
+    audioTrack.play()
+    
+    // Release track after playback
+    audioTrack.setNotificationMarkerPosition(numSamples)
+    audioTrack.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
+        override fun onMarkerReached(track: AudioTrack) {
+            track.release()
+        }
+        override fun onPeriodicNotification(track: AudioTrack) {}
+    })
 }
