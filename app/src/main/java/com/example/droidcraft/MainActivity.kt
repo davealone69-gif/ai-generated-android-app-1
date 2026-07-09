@@ -7,6 +7,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,7 +26,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Surface(modifier = Modifier.fillMaxSize()) {
                     PianoScreen()
                 }
             }
@@ -36,8 +37,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun PianoScreen() {
     val scope = rememberCoroutineScope()
-    val notes = listOf(
-        "C" to 261.63, "D" to 293.66, "E" to 329.63, 
+    val notes = mapOf(
+        "C" to 261.63, "D" to 293.66, "E" to 329.63,
         "F" to 349.23, "G" to 392.00, "A" to 440.00, "B" to 493.88
     )
 
@@ -46,14 +47,12 @@ fun PianoScreen() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("DroidCraft Synthesizer", style = MaterialTheme.typography.headlineMedium)
+        Text("DroidCraft Piano", style = MaterialTheme.typography.headlineMedium)
         Spacer(modifier = Modifier.height(32.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            notes.forEach { (note, frequency) ->
-                PianoKey(note) {
-                    scope.launch(Dispatchers.Default) {
-                        playTone(frequency)
-                    }
+            notes.forEach { (name, freq) ->
+                PianoKey(name) {
+                    scope.launch(Dispatchers.IO) { playTone(freq) }
                 }
             }
         }
@@ -61,33 +60,28 @@ fun PianoScreen() {
 }
 
 @Composable
-fun PianoKey(label: String, onClick: () -> Unit) {
+fun PianoKey(note: String, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .size(45.dp, 120.dp)
             .background(Color.White, RoundedCornerShape(4.dp))
+            .border(1.dp, Color.Black, RoundedCornerShape(4.dp))
             .clickable { onClick() },
         contentAlignment = Alignment.BottomCenter
     ) {
-        Text(label, modifier = Modifier.padding(bottom = 8.dp))
+        Text(note, modifier = Modifier.padding(bottom = 8.dp))
     }
 }
 
-fun playTone(freqOfTone: Double) {
+fun playTone(freq: Double) {
     val sampleRate = 44100
     val duration = 0.3
     val numSamples = (duration * sampleRate).toInt()
-    val generatedSnd = DoubleArray(numSamples)
-    
-    for (i in 0 until numSamples) {
-        generatedSnd[i] = sin(2.0 * Math.PI * i / (sampleRate / freqOfTone))
-    }
+    val generatedSnd = ShortArray(numSamples)
 
-    val buffer = ByteArray(numSamples * 2)
     for (i in 0 until numSamples) {
-        val pcm = (generatedSnd[i] * 32767).toInt()
-        buffer[2 * i] = (pcm and 0xff).toByte()
-        buffer[2 * i + 1] = (pcm shr 8 and 0xff).toByte()
+        val sample = sin(2.0 * Math.PI * i.toDouble() / (sampleRate / freq))
+        generatedSnd[i] = (sample * 32767).toInt().toShort()
     }
 
     val audioTrack = AudioTrack.Builder()
@@ -100,11 +94,18 @@ fun playTone(freqOfTone: Double) {
             .setSampleRate(sampleRate)
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
             .build())
-        .setBufferSizeInBytes(buffer.size)
+        .setTransferMode(AudioTrack.MODE_STATIC)
+        .setBufferSizeInBytes(numSamples * 2)
         .build()
 
-    audioTrack.play()
-    audioTrack.write(buffer, 0, buffer.size)
-    audioTrack.stop()
-    audioTrack.release()
+    try {
+        audioTrack.write(generatedSnd, 0, numSamples)
+        audioTrack.play()
+        Thread.sleep((duration * 1000).toLong())
+    } catch (e: Exception) {
+        e.printStackTrace()
+    } finally {
+        audioTrack.stop()
+        audioTrack.release()
+    }
 }
