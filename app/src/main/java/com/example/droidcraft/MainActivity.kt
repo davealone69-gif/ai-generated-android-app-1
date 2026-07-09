@@ -1,7 +1,7 @@
 package com.example.droidcraft
 
-import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -21,78 +21,74 @@ import kotlinx.coroutines.launch
 import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
+    private val sampleRate = 44100
+    private val bufferSize = AudioTrack.getMinBufferSize(
+        sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
+    )
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
-                PianoScreen()
-            }
+            PianoScreen(::playTone)
         }
+    }
+
+    private fun playTone(freqHz: Double) {
+        val audioTrack = AudioTrack(
+            AudioManager.STREAM_MUSIC,
+            sampleRate,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            bufferSize,
+            AudioTrack.MODE_STATIC
+        )
+
+        val durationMs = 300
+        val numSamples = (durationMs * sampleRate / 1000)
+        val generatedSnd = ShortArray(numSamples)
+        
+        for (i in 0 until numSamples) {
+            generatedSnd[i] = (sin(2.0 * Math.PI * i.toDouble() / (sampleRate / freqHz)) * Short.MAX_VALUE).toInt().toShort()
+        }
+
+        audioTrack.write(generatedSnd, 0, numSamples)
+        audioTrack.play()
     }
 }
 
 @Composable
-fun PianoScreen() {
+fun PianoScreen(onNotePressed: (Double) -> Unit) {
+    val notes = mapOf("C" to 261.63, "D" to 293.66, "E" to 329.63, "F" to 349.23, "G" to 392.00)
     val scope = rememberCoroutineScope()
-    val notes = listOf(261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25) // C4 to C5
 
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("Simple Synth Piano", style = MaterialTheme.typography.headlineMedium)
+        Text("Synth Piano", style = MaterialTheme.typography.headlineMedium)
         Spacer(modifier = Modifier.height(32.dp))
-        Row(modifier = Modifier.fillMaxWidth().height(200.dp)) {
-            notes.forEach { freq ->
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .padding(2.dp)
-                        .background(Color.DarkGray, RoundedCornerShape(4.dp))
-                        .clickable {
-                            scope.launch(Dispatchers.Default) {
-                                playTone(freq)
-                            }
-                        }
-                )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            notes.forEach { (name, freq) ->
+                PianoKey(name) {
+                    scope.launch(Dispatchers.Default) {
+                        onNotePressed(freq)
+                    }
+                }
             }
         }
     }
 }
 
-fun playTone(freq: Double) {
-    val sampleRate = 44100
-    val durationMs = 300
-    val numSamples = durationMs * sampleRate / 1000
-    val sample = DoubleArray(numSamples)
-    val buffer = ShortArray(numSamples)
-
-    for (i in 0 until numSamples) {
-        sample[i] = sin(2.0 * Math.PI * i.toDouble() / (sampleRate / freq))
-        buffer[i] = (sample[i] * Short.MAX_VALUE).toInt().toShort()
+@Composable
+fun PianoKey(label: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(60.dp, 150.dp)
+            .background(Color.White, shape = RoundedCornerShape(4.dp))
+            .clickable { onClick() },
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        Text(label, modifier = Modifier.padding(bottom = 8.dp))
     }
-
-    val audioTrack = AudioTrack.Builder()
-        .setAudioAttributes(
-            AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                .build()
-        )
-        .setAudioFormat(
-            AudioFormat.Builder()
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setSampleRate(sampleRate)
-                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                .build()
-        )
-        .setBufferSizeInBytes(buffer.size * 2)
-        .build()
-
-    audioTrack.play()
-    audioTrack.write(buffer, 0, buffer.size)
-    audioTrack.stop()
-    audioTrack.release()
 }
