@@ -7,7 +7,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -17,70 +16,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import kotlin.concurrent.thread
-import kotlin.math.sin
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    private val sampleRate = 44100
+    private var audioTrack: AudioTrack? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    PianoScreen()
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun PianoScreen() {
-    val notes = listOf(
-        "C" to 261.63, "D" to 293.66, "E" to 329.63, "F" to 349.23,
-        "G" to 392.00, "A" to 440.00, "B" to 493.88
-    )
-
-    Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(text = "Synthesizer Piano", style = MaterialTheme.typography.headlineMedium)
-        Spacer(modifier = Modifier.height(32.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            notes.forEach { (name, freq) ->
-                PianoKey(name, freq)
-            }
-        }
-    }
-}
-
-@Composable
-fun PianoKey(label: String, freq: Double) {
-    Box(
-        modifier = Modifier
-            .size(40.dp, 150.dp)
-            .background(Color.White, RoundedCornerShape(4.dp))
-            .border(1.dp, Color.Black, RoundedCornerShape(4.dp))
-            .clickable { playTone(freq) },
-        contentAlignment = Alignment.BottomCenter
-    ) {
-        Text(text = label, modifier = Modifier.padding(bottom = 8.dp))
-    }
-}
-
-fun playTone(freq: Double) {
-    thread {
-        val sampleRate = 44100
-        val duration = 0.5
-        val numSamples = (duration * sampleRate).toInt()
+        
         val bufferSize = AudioTrack.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT
         )
         
-        val audioTrack = AudioTrack.Builder()
+        audioTrack = AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
@@ -92,16 +44,61 @@ fun playTone(freq: Double) {
                 .build())
             .setBufferSizeInBytes(bufferSize)
             .build()
+        
+        audioTrack?.play()
 
-        val generatedSnd16 = ShortArray(numSamples)
-        for (i in 0 until numSamples) {
-            val sample = sin(2.0 * Math.PI * i.toDouble() / (sampleRate / freq))
-            generatedSnd16[i] = (sample * 32767).toInt().toShort()
+        setContent {
+            PianoScreen(::playSound)
         }
+    }
 
-        audioTrack.play()
-        audioTrack.write(generatedSnd16, 0, numSamples)
-        audioTrack.stop()
-        audioTrack.release()
+    private fun playSound(freq: Double) {
+        val durationMs = 300
+        val numSamples = (durationMs * sampleRate / 1000)
+        val sample = ShortArray(numSamples)
+        
+        for (i in 0 until numSamples) {
+            val t = i.toDouble() / sampleRate
+            sample[i] = (Math.sin(2.0 * Math.PI * freq * t) * Short.MAX_VALUE * 0.5).toInt().toShort()
+        }
+        audioTrack?.write(sample, 0, numSamples)
+    }
+
+    override fun onDestroy() {
+        audioTrack?.release()
+        super.onDestroy()
+    }
+}
+
+@Composable
+fun PianoScreen(onNotePressed: (Double) -> Unit) {
+    val notes = listOf(
+        "C" to 261.63, "D" to 293.66, "E" to 329.63, 
+        "F" to 349.23, "G" to 392.00, "A" to 440.00, "B" to 493.88
+    )
+    val scope = rememberCoroutineScope()
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text("Compose Synthesizer", style = MaterialTheme.typography.headlineMedium)
+        Spacer(modifier = Modifier.height(32.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            notes.forEach { (name, freq) ->
+                Box(
+                    modifier = Modifier
+                        .size(45.dp, 150.dp)
+                        .background(Color.White, RoundedCornerShape(4.dp))
+                        .clickable {
+                            scope.launch(Dispatchers.IO) { onNotePressed(freq) }
+                        },
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    Text(name, modifier = Modifier.padding(bottom = 8.dp))
+                }
+            }
+        }
     }
 }
