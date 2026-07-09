@@ -17,7 +17,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlin.math.sin
@@ -26,17 +25,21 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            PianoScreen()
+            MaterialTheme {
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    PianoAppScreen()
+                }
+            }
         }
     }
 }
 
 @Composable
-fun PianoScreen() {
-    val scope = rememberCoroutineScope()
-    val notes = mapOf(
-        "C" to 261.63, "D" to 293.66, "E" to 329.63,
-        "F" to 349.23, "G" to 392.00, "A" to 440.00, "B" to 493.88
+fun PianoAppScreen() {
+    val coroutineScope = rememberCoroutineScope()
+    val pianoKeys = listOf(
+        261.63f to "C", 293.66f to "D", 329.63f to "E", 349.23f to "F", 
+        392.00f to "G", 440.00f to "A", 493.88f to "B", 523.25f to "C+"
     )
 
     Column(
@@ -44,12 +47,14 @@ fun PianoScreen() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("DroidCraft Piano", style = MaterialTheme.typography.headlineMedium)
+        Text("Compose Synth Piano", style = MaterialTheme.typography.headlineMedium)
         Spacer(modifier = Modifier.height(32.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            notes.forEach { (name, freq) ->
-                PianoKey(name) {
-                    scope.launch(Dispatchers.IO) { playTone(freq) }
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            pianoKeys.forEach { (freq, note) ->
+                PianoKey(note) {
+                    coroutineScope.launch(Dispatchers.Default) {
+                        playTone(freq)
+                    }
                 }
             }
         }
@@ -60,27 +65,24 @@ fun PianoScreen() {
 fun PianoKey(note: String, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .size(45.dp, 120.dp)
+            .size(40.dp, 120.dp)
             .background(Color.White, RoundedCornerShape(4.dp))
             .border(1.dp, Color.Black, RoundedCornerShape(4.dp))
             .clickable { onClick() },
         contentAlignment = Alignment.BottomCenter
     ) {
-        Text(note, modifier = Modifier.padding(bottom = 8.dp))
+        Text(note, modifier = Modifier.padding(bottom = 8.dp), color = Color.Black)
     }
 }
 
-fun playTone(freq: Double) {
+fun playTone(freq: Float) {
     val sampleRate = 44100
-    val duration = 0.3
-    val numSamples = (duration * sampleRate).toInt()
-    val generatedSnd = ByteArray(2 * numSamples)
+    val durationMs = 200
+    val numSamples = durationMs * sampleRate / 1000
+    val buffer = ShortArray(numSamples)
 
     for (i in 0 until numSamples) {
-        val sample = sin(2 * Math.PI * i.toDouble() / (sampleRate / freq))
-        val pcm = (sample * 32767).toInt().toShort()
-        generatedSnd[2 * i] = (pcm.toInt() and 0x00ff).toByte()
-        generatedSnd[2 * i + 1] = ((pcm.toInt() and 0xff00) shr 8).toByte()
+        buffer[i] = (sin(2.0 * Math.PI * i.toDouble() / (sampleRate / freq)) * Short.MAX_VALUE).toInt().toShort()
     }
 
     val audioTrack = AudioTrack.Builder()
@@ -93,14 +95,15 @@ fun playTone(freq: Double) {
             .setSampleRate(sampleRate)
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
             .build())
-        .setBufferSizeInBytes(generatedSnd.size)
+        .setBufferSizeInBytes(buffer.size * 2)
+        .setTransferMode(AudioTrack.MODE_STATIC)
         .build()
 
-    audioTrack.write(generatedSnd, 0, generatedSnd.size)
+    audioTrack.write(buffer, 0, buffer.size)
     audioTrack.play()
     
-    // Release resources after playback
-    Thread.sleep((duration * 1000).toLong())
+    // Release after playing
+    Thread.sleep(durationMs.toLong() + 50)
     audioTrack.stop()
     audioTrack.release()
 }
