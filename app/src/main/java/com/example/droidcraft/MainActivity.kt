@@ -14,12 +14,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
     private val sampleRate = 44100
@@ -35,37 +33,36 @@ class MainActivity : ComponentActivity() {
         )
         
         audioTrack = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build()
-            )
-            .setAudioFormat(
-                AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(sampleRate)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build()
-            )
+            .setAudioAttributes(AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build())
+            .setAudioFormat(AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(sampleRate)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .build())
             .setBufferSizeInBytes(bufferSize)
             .build()
         
         audioTrack?.play()
 
         setContent {
-            PianoScreen(::playTone)
+            PianoScreen { frequency -> playTone(frequency) }
         }
     }
 
     private fun playTone(freq: Double) {
-        val duration = 0.3
-        val numSamples = (duration * sampleRate).toInt()
-        val sample = ShortArray(numSamples)
+        val durationMs = 300
+        val numSamples = (durationMs * sampleRate / 1000)
+        val generatedSnd = ShortArray(numSamples)
+        
         for (i in 0 until numSamples) {
-            sample[i] = (sin(2.0 * Math.PI * i / (sampleRate / freq)) * 32767).toInt().toShort()
+            val time = i.toDouble() / sampleRate
+            val angle = 2.0 * Math.PI * freq * time
+            generatedSnd[i] = (Math.sin(angle) * Short.MAX_VALUE).toInt().toShort()
         }
-        audioTrack?.write(sample, 0, numSamples)
+        audioTrack?.write(generatedSnd, 0, numSamples)
     }
 
     override fun onDestroy() {
@@ -76,31 +73,29 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun PianoScreen(onPlayNote: (Double) -> Unit) {
-    val notes = listOf(261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25)
     val scope = rememberCoroutineScope()
+    val keys = listOf(
+        "C" to 261.63, "D" to 293.66, "E" to 329.63, 
+        "F" to 349.23, "G" to 392.00, "A" to 440.00, "B" to 493.88
+    )
 
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("DroidCraft Synth Piano", style = MaterialTheme.typography.headlineMedium)
+        Text("DroidCraft Synthesizer", style = MaterialTheme.typography.headlineMedium)
         Spacer(modifier = Modifier.height(32.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            notes.forEach { freq ->
+            keys.forEach { (name, freq) ->
                 Box(
                     modifier = Modifier
-                        .size(40.dp, 120.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(Color.White)
-                        .clickable {
-                            scope.launch(Dispatchers.Default) {
-                                onPlayNote(freq)
-                            }
-                        },
+                        .size(45.dp, 150.dp)
+                        .background(Color.White, RoundedCornerShape(4.dp))
+                        .clickable { scope.launch(Dispatchers.IO) { onPlayNote(freq) } },
                     contentAlignment = Alignment.BottomCenter
                 ) {
-                    Text("♪", modifier = Modifier.padding(bottom = 8.dp))
+                    Text(name, modifier = Modifier.padding(bottom = 8.dp))
                 }
             }
         }
