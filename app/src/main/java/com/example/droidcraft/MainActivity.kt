@@ -33,9 +33,9 @@ class MainActivity : ComponentActivity() {
 fun PianoAppScreen() {
     val coroutineScope = rememberCoroutineScope()
     val sampleRate = 44100
-    val pianoNotes = listOf(
-        "C" to 261.63, "D" to 293.66, "E" to 329.63, "F" to 349.23,
-        "G" to 392.00, "A" to 440.00, "B" to 493.88
+    val pianoKeys = listOf(
+        261.63f to "C", 293.66f to "D", 329.63f to "E", 
+        349.23f to "F", 392.00f to "G", 440.00f to "A", 493.88f to "B"
     )
 
     Column(
@@ -45,49 +45,54 @@ fun PianoAppScreen() {
     ) {
         Text("DroidCraft Synthesizer", style = MaterialTheme.typography.headlineMedium)
         Spacer(modifier = Modifier.height(32.dp))
-        
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            pianoNotes.forEach { (note, freq) ->
-                Box(
-                    modifier = Modifier
-                        .size(45.dp, 120.dp)
-                        .background(Color.White, RoundedCornerShape(4.dp))
-                        .clickable {
-                            coroutineScope.launch(Dispatchers.IO) {
-                                playTone(freq, sampleRate)
-                            }
-                        },
-                    contentAlignment = Alignment.BottomCenter
-                ) {
-                    Text(note, modifier = Modifier.padding(bottom = 8.dp))
+            pianoKeys.forEach { (freq, note) ->
+                PianoKey(note) {
+                    coroutineScope.launch(Dispatchers.IO) {
+                        playTone(freq, sampleRate)
+                    }
                 }
             }
         }
     }
 }
 
-private fun playTone(freq: Double, sampleRate: Int) {
-    val durationMs = 500
-    val numSamples = durationMs * sampleRate / 1000
-    val sample = DoubleArray(numSamples)
-    val generatedSnd = ByteArray(2 * numSamples)
-
-    for (i in 0 until numSamples) {
-        sample[i] = sin(2.0 * Math.PI * i.toDouble() / (sampleRate.toDouble() / freq))
-        val pcm = (sample[i] * 32767).toInt()
-        generatedSnd[2 * i] = (pcm and 0xff).toByte()
-        generatedSnd[2 * i + 1] = ((pcm shr 8) and 0xff).toByte()
+@Composable
+fun PianoKey(note: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(45.dp, 150.dp)
+            .background(Color.White, RoundedCornerShape(4.dp))
+            .clickable { onClick() },
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        Text(note, modifier = Modifier.padding(bottom = 8.dp))
     }
+}
 
+fun playTone(freq: Float, sampleRate: Int) {
+    val durationMs = 300
+    val numSamples = durationMs * sampleRate / 1000
+    val sample = ShortArray(numSamples)
+    
+    for (i in 0 until numSamples) {
+        sample[i] = (sin(2.0 * Math.PI * i / (sampleRate / freq)) * 32767.0).toInt().toShort()
+    }
+    
     val audioTrack = AudioTrack(
         AudioManager.STREAM_MUSIC,
         sampleRate,
         AudioFormat.CHANNEL_OUT_MONO,
         AudioFormat.ENCODING_PCM_16BIT,
-        generatedSnd.size,
+        numSamples * 2,
         AudioTrack.MODE_STATIC
     )
-    audioTrack.write(generatedSnd, 0, generatedSnd.size)
+    
+    audioTrack.write(sample, 0, numSamples)
     audioTrack.play()
+    
+    // Release track after playback
+    Thread.sleep(durationMs.toLong())
+    audioTrack.stop()
     audioTrack.release()
 }
