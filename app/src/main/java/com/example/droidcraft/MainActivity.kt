@@ -1,5 +1,6 @@
 package com.example.droidcraft
 
+import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
@@ -7,159 +8,304 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import kotlinx.coroutines.*
-import kotlin.math.sin
+import kotlinx.coroutines.flow.MutableStateFlow
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.PI
 import kotlin.math.pow
+import kotlin.math.sin
 
-// Constants for audio synthesis
-const val SAMPLE_RATE = 44100 // Samples per second
-const val NUM_CHANNELS = 1 // Mono
-const val BITS_PER_SAMPLE = 16 // 16-bit PCM
-val BUFFER_SIZE: Int = AudioTrack.getMinBufferSize(
-    SAMPLE_RATE,
-    AudioFormat.CHANNEL_OUT_MONO,
-    AudioFormat.ENCODING_PCM_16BIT
-)
+// --- Sound Synthesis Engine ---
+
+private const val SAMPLE_RATE = 44100 // Standard sample rate
+private const val BUFFER_SIZE_SAMPLES = 2048 // Number of samples per audio buffer
 
 /**
- * Helper function to calculate frequency from MIDI note number.
- * A4 (MIDI note 69) is set to 440 Hz.
+ * Manages the generation and playback of audio for the piano.
+ * Uses a single AudioTrack and a background coroutine to mix active NoteVoices.
  */
-fun midiNoteToFrequency(midiNote: Int): Float {
-    return (440.0 * 2.0.pow((midiNote - 69) / 12.0)).toFloat()
-}
-
-class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContent {
-            // Apply a basic MaterialTheme for consistent UI styling.
-            // In a larger app, you'd typically define a custom theme.
-            MaterialTheme {
-                PianoAppScreen()
-            }
-        }
-    }
-}
-
-/**
- * Manages the AudioTrack and sound synthesis logic.
- * Encapsulates the audio playback details, allowing Composables to trigger notes easily.
- */
-class SoundSynthesizer(private val coroutineScope: CoroutineScope) {
-    private var audioTrack: AudioTrack? = null
-    private var currentPlaybackJob: Job? = null
+class AudioSynthesizer(private val coroutineScope: CoroutineScope) {
+    private val audioTrack: AudioTrack
+    private val activeNotes = ConcurrentHashMap<Int, NoteVoice>() // Midi Note -> NoteVoice
+    private val synthJob = MutableStateFlow<Job?>(null)
 
     init {
-        // Initialize AudioTrack upon instantiation.
-        // MODE_STREAM is used for continuous writing of audio data.
-        audioTrack = AudioTrack(
-            AudioManager.STREAM_MUSIC, // Use the music stream type
+        val minBufferSize = AudioTrack.getMinBufferSize(
             SAMPLE_RATE,
             AudioFormat.CHANNEL_OUT_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            BUFFER_SIZE,
-            AudioTrack.MODE_STREAM
-        ).apply {
-            play() // Start the audio track playback loop, ready to receive data
-        }
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+        // Ensure buffer is large enough, at least double BUFFER_SIZE_SAMPLES for smooth streaming
+        val actualBufferSize = maxOf(minBufferSize, BUFFER_SIZE_SAMPLES * 2)
+
+        audioTrack = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(SAMPLE_RATE)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build()
+            )
+            .setBufferSizeInBytes(actualBufferSize * 2) // short is 2 bytes
+            .setMode(AudioTrack.MODE_STREAM)
+            .build()
     }
 
-    /**
-     * Plays a single note with a given frequency for a specified duration.
-     * Cancels any previously playing note to maintain monophonic playback (only one note at a time).
-     */
-    fun playNote(frequency: Float, durationMs: Long = 500) {
-        // Ensure that the AudioTrack is not null and is ready for playback
-        audioTrack?.let { track ->
-            // Cancel any ongoing sound generation to make it monophonic
-            currentPlaybackJob?.cancel()
-
-            // Launch a new coroutine for sound generation to avoid blocking the UI thread
-            currentPlaybackJob = coroutineScope.launch(Dispatchers.Default) {
-                // Calculate the number of samples needed for the desired duration
-                val numSamples = (SAMPLE_RATE * durationMs / 1000).toInt()
-                val audioBuffer = ShortArray(numSamples)
-                // Set amplitude, reducing it slightly to prevent clipping and for a softer sound
-                val amplitude = Short.MAX_VALUE.toFloat() * 0.5f
-
-                // Generate sine wave samples
-                for (i in 0 until numSamples) {
-                    val time = i.toFloat() / SAMPLE_RATE
-                    audioBuffer[i] = (amplitude * sin(2 * PI * frequency * time)).toInt().toShort()
+    /** Starts the audio synthesis and playback loop. */
+    fun start() {
+        if (synthJob.value?.isActive != true) {
+            audioTrack.play()
+            synthJob.value = coroutineScope.launch(Dispatchers.Default) {
+                val audioBuffer = ShortArray(BUFFER_SIZE_SAMPLES)
+                while (isActive) { // Loop while coroutine is active
+                    for (i in 0 until BUFFER_SIZE_SAMPLES) {
+                        var sampleValue = 0.0
+                        activeNotes.forEach { (_, voice) ->
+                            sampleValue += voice.getSample()
+                        }
+                        // Simple clipping and normalization
+                        sampleValue = sampleValue.coerceIn(-1.0, 1.0) * Short.MAX_VALUE
+                        audioBuffer[i] = sampleValue.toShort()
+                    }
+                    audioTrack.write(audioBuffer, 0, BUFFER_SIZE_SAMPLES)
                 }
-
-                // Write the generated samples to the AudioTrack.
-                // This call is blocking until the data is written to the AudioTrack's internal buffer.
-                track.write(audioBuffer, 0, numSamples)
             }
         }
     }
 
-    /**
-     * Releases the AudioTrack resources. This method MUST be called when the synthesizer
-     * is no longer needed (e.g., when the Composable leaves the composition)
-     * to prevent resource leaks.
-     */
-    fun release() {
-        currentPlaybackJob?.cancel() // Cancel any ongoing sound generation coroutine
-        audioTrack?.apply {
-            stop() // Stop playback
-            release() // Release native resources associated with the AudioTrack
+    /** Stops the audio synthesis and pauses the AudioTrack. */
+    fun stop() {
+        synthJob.value?.cancel()
+        synthJob.value = null
+        if (audioTrack.playState == AudioTrack.PLAYSTATE_PLAYING) {
+            audioTrack.pause()
+            audioTrack.flush() // Clear any pending data
         }
-        audioTrack = null
+        activeNotes.clear() // Stop all active notes
+    }
+
+    /** Releases all resources held by the AudioSynthesizer. */
+    fun release() {
+        stop()
+        if (audioTrack.state != AudioTrack.STATE_UNINITIALIZED) {
+            audioTrack.release()
+        }
+    }
+
+    /** Triggers a note to start playing. */
+    fun noteOn(midiNote: Int) {
+        // Only add if not already playing to avoid resetting phase of an active note
+        activeNotes.computeIfAbsent(midiNote) { NoteVoice(it) }
+    }
+
+    /** Triggers a note to stop playing. */
+    fun noteOff(midiNote: Int) {
+        activeNotes.remove(midiNote)
     }
 }
 
-@Composable
-fun PianoAppScreen() {
-    // Obtain a CoroutineScope tied to the lifecycle of this Composable.
-    // This is crucial for managing background tasks like sound generation.
-    val coroutineScope = rememberCoroutineScope()
-    
-    // Create and remember the SoundSynthesizer instance.
-    // It will be initialized once and retained across recompositions.
-    val synthesizer = remember {
-        SoundSynthesizer(coroutineScope)
-    }
+/**
+ * Represents a single oscillating voice (note).
+ * Generates a sine wave based on its MIDI note frequency.
+ */
+class NoteVoice(private val midiNote: Int) {
+    // Calculate frequency from MIDI note number (A4 = 440 Hz = MIDI 69)
+    private val frequency = 440.0 * 2.0.pow((midiNote - 69) / 12.0)
+    private var currentPhase = 0.0 // Current phase (0.0 to 1.0) of the sine wave
 
-    // Use DisposableEffect to manage the lifecycle of the SoundSynthesizer.
-    // The onDispose block ensures that `synthesizer.release()` is called
-    // when PianoAppScreen leaves the composition, preventing resource leaks.
-    DisposableEffect(synthesizer) {
-        onDispose {
-            synthesizer.release()
+    /**
+     * Generates the next sample for this note.
+     * Each call advances the internal phase of the oscillator.
+     */
+    fun getSample(): Double {
+        val sample = sin(2 * PI * currentPhase)
+        currentPhase += frequency / SAMPLE_RATE // Increment phase based on frequency and sample rate
+        // Keep phase within 0-1 to prevent large numbers and maintain precision
+        if (currentPhase >= 1.0) currentPhase -= 1.0
+        return sample * 0.2 // Apply a volume adjustment
+    }
+}
+
+// --- Compose UI Components ---
+
+/**
+ * Custom pointer input detector for press and release events.
+ */
+suspend fun PointerInputScope.detectPressAndRelease(
+    onPress: (Offset) -> Unit = {},
+    onRelease: () -> Unit = {}
+) {
+    awaitEachGesture {
+        val down = awaitFirstDown() // Wait for the first pointer to go down
+        onPress(down.position)
+        waitForUpOrCancellation() // Wait for all pointers to go up or for the gesture to be cancelled
+        onRelease()
+    }
+}
+
+/**
+ * A single piano key, handling touch input and triggering sound.
+ */
+@Composable
+fun Key(
+    midiNote: Int,
+    isBlack: Boolean,
+    synthesizer: AudioSynthesizer,
+    modifier: Modifier = Modifier
+) {
+    var isPressed by remember { mutableStateOf(false) }
+
+    val keyColor = if (isPressed) {
+        if (isBlack) Color(0xFF333333) else Color(0xFFDDDDDD) // Darker when pressed
+    } else {
+        if (isBlack) Color.Black else Color.White
+    }
+    val borderColor = if (isBlack) Color.DarkGray else Color.Gray
+
+    Box(
+        modifier = modifier
+            .fillMaxHeight()
+            .background(keyColor, shape = RoundedCornerShape(4.dp))
+            .border(1.dp, borderColor, shape = RoundedCornerShape(4.dp))
+            .pointerInput(midiNote) { // key by midiNote to recompose only when midiNote changes
+                detectPressAndRelease(
+                    onPress = {
+                        isPressed = true
+                        synthesizer.noteOn(midiNote)
+                    },
+                    onRelease = {
+                        isPressed = false
+                        synthesizer.noteOff(midiNote)
+                    }
+                )
+            }
+    ) {
+        // Optional: uncomment to show midi note on key for debugging
+        /*
+        Text(
+            text = "$midiNote",
+            color = if (isBlack) Color.White else Color.Black,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 4.dp)
+        )
+        */
+    }
+}
+
+/**
+ * The main piano keyboard composable, arranging white and black keys.
+ */
+@Composable
+fun PianoKeyboard(synthesizer: AudioSynthesizer) {
+    // Define MIDI notes for the white keys (C4 to C5)
+    val whiteKeysMidi = remember { listOf(60, 62, 64, 65, 67, 69, 71, 72) } // C4, D4, E4, F4, G4, A4, B4, C5
+    // Define MIDI notes for the black keys, with -1 placeholders for missing black keys (E-F, B-C)
+    val blackKeysMidi = remember { listOf(61, 63, -1, 66, 68, 70) } // C#4, D#4, F#4, G#4, A#4
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth(0.95f)
+            .height(220.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.DarkGray)
+            .padding(all = 4.dp)
+    ) {
+        val totalWidth = maxWidth
+        val whiteKeyWidth = totalWidth / whiteKeysMidi.size
+        val blackKeyWidth = whiteKeyWidth * 0.6f // Black keys are narrower than white keys
+
+        // White Keys Layer
+        Row(modifier = Modifier.fillMaxSize()) {
+            whiteKeysMidi.forEach { midiNote ->
+                Key(
+                    midiNote = midiNote,
+                    isBlack = false,
+                    synthesizer = synthesizer,
+                    modifier = Modifier
+                        .width(whiteKeyWidth)
+                        .padding(horizontal = 1.dp) // Small gap between white keys
+                )
+            }
+        }
+
+        // Black Keys Layer (positioned absolutely on top of white keys)
+        // Position offsets are calculated relative to the start of the entire keyboard.
+        blackKeysMidi.forEachIndexed { index, midiNote ->
+            if (midiNote != -1) {
+                // Determine the x-offset for each black key
+                val offsetFraction = when (midiNote) {
+                    61 -> 0.7f // C#4, between C4 and D4
+                    63 -> 1.7f // D#4, between D4 and E4
+                    66 -> 3.7f // F#4, between F4 and G4
+                    68 -> 4.7f // G#4, between G4 and A4
+                    70 -> 5.7f // A#4, between A4 and B4
+                    else -> 0f // Should not happen for valid black keys
+                }
+                val xOffset = (whiteKeyWidth * offsetFraction) - (blackKeyWidth / 2)
+
+                // The Key composable for black keys
+                Box(
+                    modifier = Modifier
+                        .offset(x = xOffset, y = 0.dp) // Position black key
+                        .zIndex(1f) // Ensure black keys render above white keys
+                ) {
+                    Key(
+                        midiNote = midiNote,
+                        isBlack = true,
+                        synthesizer = synthesizer,
+                        modifier = Modifier
+                            .width(blackKeyWidth)
+                            .height(120.dp) // Black keys are shorter
+                            .padding(horizontal = 1.dp) // Small gap
+                    )
+                }
+            }
         }
     }
+}
 
-    // Define the set of piano notes (white keys for simplicity) and their corresponding frequencies.
-    val pianoNotes = remember {
-        listOf(
-            "C4" to midiNoteToFrequency(60),
-            "D4" to midiNoteToFrequency(62),
-            "E4" to midiNoteToFrequency(64),
-            "F4" to midiNoteToFrequency(65),
-            "G4" to midiNoteToFrequency(67),
-            "A4" to midiNoteToFrequency(69),
-            "B4" to midiNoteToFrequency(71),
-            "C5" to midiNoteToFrequency(72)
-        )
+// --- Main App Screen ---
+
+@Composable
+fun MainAppScreen() {
+    // Remember a CoroutineScope tied to the Composable's lifecycle
+    val coroutineScope = rememberCoroutineScope()
+    // Remember and initialize the AudioSynthesizer
+    val audioSynthesizer = remember { AudioSynthesizer(coroutineScope) }
+
+    // Manage the AudioSynthesizer's lifecycle with DisposableEffect
+    DisposableEffect(Unit) {
+        audioSynthesizer.start() // Start the synthesis thread when composable enters composition
+        onDispose {
+            audioSynthesizer.release() // Release resources when composable leaves composition
+        }
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background) // Use app's background color
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -168,70 +314,36 @@ fun PianoAppScreen() {
             text = "DroidCraft Piano",
             fontWeight = FontWeight.Bold,
             style = MaterialTheme.typography.headlineLarge,
-            color = MaterialTheme.colorScheme.onBackground
+            modifier = Modifier.padding(bottom = 32.dp)
         )
-        Spacer(modifier = Modifier.height(32.dp))
 
-        // Card component to visually group and style the piano keys area.
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(200.dp) // Fixed height for the keyboard layout
-                .padding(horizontal = 8.dp),
-            colors = CardDefaults.cardColors(containerColor = Color.LightGray),
-            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(8.dp), // Padding inside the card to space keys from edges
-                horizontalArrangement = Arrangement.SpaceAround, // Distribute keys evenly
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Iterate through the defined piano notes to create clickable PianoKey Composables.
-                pianoNotes.forEach { (noteName, frequency) ->
-                    PianoKey(noteName = noteName) {
-                        synthesizer.playNote(frequency) // Play the note when a key is tapped
-                    }
-                }
-            }
-        }
-        Spacer(modifier = Modifier.height(24.dp))
+        // The piano keyboard UI
+        PianoKeyboard(audioSynthesizer)
+
+        Spacer(modifier = Modifier.height(32.dp))
         Text(
-            text = "Tap a key to play a note!",
+            text = "Tap keys to play!",
             style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onBackground
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
 
-/**
- * A Composable representing a single piano key.
- * It's styled as a white key and displays the note name.
- */
-@Composable
-fun PianoKey(noteName: String, onClick: () -> Unit) {
-    Card(
-        modifier = Modifier
-            .width(48.dp) // Fixed width for a standard-looking key
-            .fillMaxHeight(0.9f) // Keys fill most of the height of their parent Row
-            .padding(4.dp) // Internal padding around each key
-            .clickable(onClick = onClick), // Make the entire card respond to clicks
-        colors = CardDefaults.cardColors(containerColor = Color.White), // White keys
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-        shape = MaterialTheme.shapes.small // Slightly rounded corners for keys
-    ) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.BottomCenter // Position the note name at the bottom
-        ) {
-            Text(
-                text = noteName,
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.Black,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(bottom = 8.dp) // Padding for text from bottom edge
-            )
+// --- MainActivity ---
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            // Apply Material Design 3 theme (using default for simplicity)
+            MaterialTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    MainAppScreen()
+                }
+            }
         }
     }
 }
