@@ -77,10 +77,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        audioTrack?.apply {
-            if (playState == AudioTrack.PLAYSTATE_PLAYING) stop()
-            release()
-        }
+        audioTrack?.release()
         audioTrack = null
     }
 }
