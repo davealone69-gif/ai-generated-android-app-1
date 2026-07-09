@@ -18,36 +18,38 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            PianoApp()
+            PianoScreen()
         }
     }
 }
 
 @Composable
-fun PianoApp() {
+fun PianoScreen() {
     val scope = rememberCoroutineScope()
-    
-    // Frequencies for one octave (C4 to C5)
     val notes = mapOf(
-        "C" to 261.63, "C#" to 277.18, "D" to 293.66, "D#" to 311.13,
-        "E" to 329.63, "F" to 349.23, "F#" to 369.99, "G" to 392.00,
-        "G#" to 415.30, "A" to 440.00, "A#" to 466.16, "B" to 493.88
+        "C" to 261.63,
+        "D" to 293.66,
+        "E" to 329.63,
+        "F" to 349.23,
+        "G" to 392.00,
+        "A" to 440.00,
+        "B" to 493.88
     )
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
+        modifier = Modifier.fillMaxSize().background(Color.Black).padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text(text = "Compose Synth Piano", style = MaterialTheme.typography.headlineMedium)
+        Text("DroidCraft Synthesizer", color = Color.White, style = MaterialTheme.typography.headlineSmall)
         Spacer(modifier = Modifier.height(32.dp))
-        
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             notes.forEach { (name, freq) ->
                 PianoKey(name) {
                     scope.launch(Dispatchers.Default) {
@@ -61,43 +63,41 @@ fun PianoApp() {
 
 @Composable
 fun PianoKey(label: String, onClick: () -> Unit) {
-    Box(
+    Surface(
         modifier = Modifier
-            .size(width = 40.dp, height = 120.dp)
-            .background(Color.White, RoundedCornerShape(4.dp))
+            .size(40.dp, 150.dp)
             .clickable { onClick() },
-        contentAlignment = Alignment.BottomCenter
+        color = Color.White,
+        shape = RoundedCornerShape(bottomStart = 4.dp, bottomEnd = 4.dp)
     ) {
-        Text(text = label, modifier = Modifier.padding(bottom = 8.dp))
+        Box(contentAlignment = Alignment.BottomCenter, modifier = Modifier.padding(8.dp)) {
+            Text(label, color = Color.Black)
+        }
     }
 }
 
-fun playTone(freqOfTone: Double) {
+fun playTone(freqHz: Double) {
     val durationMs = 300
     val sampleRate = 44100
     val numSamples = durationMs * sampleRate / 1000
-    val generatedSound = DoubleArray(numSamples)
+    val sample = DoubleArray(numSamples)
     val buffer = ShortArray(numSamples)
 
     for (i in 0 until numSamples) {
-        generatedSound[i] = Math.sin(2.0 * Math.PI * i / (sampleRate / freqOfTone))
-        buffer[i] = (generatedSound[i] * Short.MAX_VALUE).toInt().toShort()
+        sample[i] = sin(2.0 * Math.PI * i.toDouble() / (sampleRate.toDouble() / freqHz))
+        buffer[i] = (sample[i] * Short.MAX_VALUE).toInt().toShort()
     }
 
     val audioTrack = AudioTrack.Builder()
-        .setAudioAttributes(
-            AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                .build()
-        )
-        .setAudioFormat(
-            AudioFormat.Builder()
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setSampleRate(sampleRate)
-                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                .build()
-        )
+        .setAudioAttributes(AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+            .build())
+        .setAudioFormat(AudioFormat.Builder()
+            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+            .setSampleRate(sampleRate)
+            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+            .build())
         .setBufferSizeInBytes(numSamples * 2)
         .build()
 
