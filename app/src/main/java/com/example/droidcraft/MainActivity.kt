@@ -24,15 +24,20 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            PianoAppScreen()
+            MaterialTheme {
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    PianoScreen()
+                }
+            }
         }
     }
 }
 
 @Composable
-fun PianoAppScreen() {
+fun PianoScreen() {
     val scope = rememberCoroutineScope()
-    val notes = listOf(
+    
+    val frequencies = mapOf(
         "C" to 261.63,
         "D" to 293.66,
         "E" to 329.63,
@@ -47,10 +52,10 @@ fun PianoAppScreen() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("Compose Piano Synthesizer", style = MaterialTheme.typography.headlineSmall)
+        Text("Synth Piano", style = MaterialTheme.typography.headlineMedium)
         Spacer(modifier = Modifier.height(32.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            notes.forEach { (note, freq) ->
+            frequencies.forEach { (note, freq) ->
                 PianoKey(note) {
                     scope.launch(Dispatchers.Default) {
                         playTone(freq)
@@ -62,47 +67,51 @@ fun PianoAppScreen() {
 }
 
 @Composable
-fun PianoKey(note: String, onClick: () -> Unit) {
+fun PianoKey(label: String, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .size(45.dp, 120.dp)
-            .background(Color.White, RoundedCornerShape(4.dp))
+            .size(40.dp, 120.dp)
+            .background(Color.White, shape = RoundedCornerShape(4.dp))
             .clickable { onClick() },
         contentAlignment = Alignment.BottomCenter
     ) {
-        Text(text = note, modifier = Modifier.padding(bottom = 8.dp))
+        Text(label, modifier = Modifier.padding(bottom = 8.dp))
     }
 }
 
 fun playTone(freqOfTone: Double) {
-    val durationMs = 300
     val sampleRate = 44100
-    val numSamples = (durationMs * sampleRate / 1000)
-    val sample = DoubleArray(numSamples)
-    val generatedSnd = ByteArray(2 * numSamples)
-
-    for (i in 0 until numSamples) {
-        sample[i] = sin(2.0 * Math.PI * i.toDouble() / (sampleRate.toDouble() / freqOfTone))
-        val pcm = (sample[i] * 32767).toInt()
-        generatedSnd[2 * i] = (pcm and 0x00ff).toByte()
-        generatedSnd[2 * i + 1] = ((pcm and 0xff00) ushr 8).toByte()
-    }
-
+    val duration = 0.3
+    val numSamples = (duration * sampleRate).toInt()
+    val generatedSnd = DoubleArray(numSamples)
     val audioTrack = AudioTrack.Builder()
-        .setAudioAttributes(AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-            .build())
-        .setAudioFormat(AudioFormat.Builder()
-            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-            .setSampleRate(sampleRate)
-            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-            .build())
-        .setBufferSizeInBytes(generatedSnd.size)
+        .setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build()
+        )
+        .setAudioFormat(
+            AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(sampleRate)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .build()
+        )
+        .setBufferSizeInBytes(numSamples * 2)
         .build()
 
+    for (i in 0 until numSamples) {
+        generatedSnd[i] = sin(2.0 * Math.PI * i.toDouble() / (sampleRate / freqOfTone))
+    }
+
+    val generatedSndShort = ShortArray(numSamples)
+    for (i in 0 until numSamples) {
+        generatedSndShort[i] = (generatedSnd[i] * 32767).toInt().toShort()
+    }
+
     audioTrack.play()
-    audioTrack.write(generatedSnd, 0, generatedSnd.size)
+    audioTrack.write(generatedSndShort, 0, numSamples)
     audioTrack.stop()
     audioTrack.release()
 }
