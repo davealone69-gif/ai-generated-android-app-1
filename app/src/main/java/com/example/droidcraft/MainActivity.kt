@@ -1,12 +1,13 @@
 package com.example.droidcraft
 
+import android.media.AudioAttributes
 import android.media.AudioFormat
-import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -16,77 +17,91 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import kotlin.concurrent.thread
 import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            PianoAppScreen()
+            MaterialTheme {
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    PianoScreen()
+                }
+            }
         }
     }
 }
 
 @Composable
-fun PianoAppScreen() {
-    val coroutineScope = rememberCoroutineScope()
-    val sampleRate = 44100
-    
-    val notes = mapOf(
-        "C" to 261.63,
-        "D" to 293.66,
-        "E" to 329.63,
-        "F" to 349.23,
-        "G" to 392.00,
-        "A" to 440.00,
-        "B" to 493.88
+fun PianoScreen() {
+    val notes = listOf(
+        "C" to 261.63, "D" to 293.66, "E" to 329.63, "F" to 349.23,
+        "G" to 392.00, "A" to 440.00, "B" to 493.88
     )
-
-    fun playTone(freq: Double) {
-        coroutineScope.launch(Dispatchers.Default) {
-            val durationMs = 300
-            val numSamples = (durationMs * sampleRate / 1000)
-            val buffer = ShortArray(numSamples)
-            
-            for (i in 0 until numSamples) {
-                buffer[i] = (sin(2.0 * Math.PI * i / (sampleRate / freq)) * Short.MAX_VALUE).toInt().toShort()
-            }
-            
-            val audioTrack = AudioTrack(
-                AudioManager.STREAM_MUSIC,
-                sampleRate,
-                AudioFormat.CHANNEL_OUT_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                numSamples * 2,
-                AudioTrack.MODE_STATIC
-            )
-            audioTrack.write(buffer, 0, numSamples)
-            audioTrack.play()
-        }
-    }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("DroidCraft Synthesizer", style = MaterialTheme.typography.headlineMedium)
+        Text(text = "Synthesizer Piano", style = MaterialTheme.typography.headlineMedium)
         Spacer(modifier = Modifier.height(32.dp))
-        
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             notes.forEach { (name, freq) ->
-                Box(
-                    modifier = Modifier
-                        .size(40.dp, 120.dp)
-                        .background(Color.White, RoundedCornerShape(4.dp))
-                        .clickable { playTone(freq) },
-                    contentAlignment = Alignment.BottomCenter
-                ) {
-                    Text(name, modifier = Modifier.padding(bottom = 8.dp))
-                }
+                PianoKey(name, freq)
             }
         }
+    }
+}
+
+@Composable
+fun PianoKey(label: String, freq: Double) {
+    Box(
+        modifier = Modifier
+            .size(40.dp, 150.dp)
+            .background(Color.White, RoundedCornerShape(4.dp))
+            .border(1.dp, Color.Black, RoundedCornerShape(4.dp))
+            .clickable { playTone(freq) },
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        Text(text = label, modifier = Modifier.padding(bottom = 8.dp))
+    }
+}
+
+fun playTone(freq: Double) {
+    thread {
+        val sampleRate = 44100
+        val duration = 0.5
+        val numSamples = (duration * sampleRate).toInt()
+        val bufferSize = AudioTrack.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+        
+        val audioTrack = AudioTrack.Builder()
+            .setAudioAttributes(AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build())
+            .setAudioFormat(AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(sampleRate)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .build())
+            .setBufferSizeInBytes(bufferSize)
+            .build()
+
+        val generatedSnd16 = ShortArray(numSamples)
+        for (i in 0 until numSamples) {
+            val sample = sin(2.0 * Math.PI * i.toDouble() / (sampleRate / freq))
+            generatedSnd16[i] = (sample * 32767).toInt().toShort()
+        }
+
+        audioTrack.play()
+        audioTrack.write(generatedSnd16, 0, numSamples)
+        audioTrack.stop()
+        audioTrack.release()
     }
 }
