@@ -107,7 +107,7 @@ fun PianoScreen(onPlayTone: (Double) -> Unit) {
                         .size(45.dp, 150.dp)
                         .background(Color.White)
                         .border(1.dp, Color.Black)
-                        .clickable { scope.launch(Dispatchers.Default) { onPlayTone(freq) } },
+                        .clickable { scope.launch(Dispatchers.IO) { onPlayTone(freq) } },
                     contentAlignment = Alignment.BottomCenter
                 ) {
                     Text(text = name, modifier = Modifier.padding(bottom = 8.dp), color = Color.Black)
