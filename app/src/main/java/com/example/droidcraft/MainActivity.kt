@@ -24,7 +24,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            PianoScreen()
+            MaterialTheme {
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    PianoScreen()
+                }
+            }
         }
     }
 }
@@ -32,7 +36,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun PianoScreen() {
     val scope = rememberCoroutineScope()
-    val notes = mapOf(
+    val notes = listOf(
         "C" to 261.63,
         "D" to 293.66,
         "E" to 329.63,
@@ -43,16 +47,19 @@ fun PianoScreen() {
     )
 
     Column(
-        modifier = Modifier.fillMaxSize().background(Color.Black).padding(16.dp),
+        modifier = Modifier.fillMaxSize().padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("DroidCraft Synthesizer", color = Color.White, style = MaterialTheme.typography.headlineSmall)
+        Text("DroidCraft Synth Piano", style = MaterialTheme.typography.headlineMedium)
         Spacer(modifier = Modifier.height(32.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
             notes.forEach { (name, freq) ->
                 PianoKey(name) {
-                    scope.launch(Dispatchers.Default) {
+                    scope.launch(Dispatchers.IO) {
                         playTone(freq)
                     }
                 }
@@ -63,46 +70,48 @@ fun PianoScreen() {
 
 @Composable
 fun PianoKey(label: String, onClick: () -> Unit) {
-    Surface(
+    Box(
         modifier = Modifier
-            .size(40.dp, 150.dp)
+            .size(45.dp, 120.dp)
+            .background(Color.White, RoundedCornerShape(4.dp))
             .clickable { onClick() },
-        color = Color.White,
-        shape = RoundedCornerShape(bottomStart = 4.dp, bottomEnd = 4.dp)
+        contentAlignment = Alignment.BottomCenter
     ) {
-        Box(contentAlignment = Alignment.BottomCenter, modifier = Modifier.padding(8.dp)) {
-            Text(label, color = Color.Black)
-        }
+        Text(text = label, modifier = Modifier.padding(bottom = 8.dp))
     }
 }
 
-fun playTone(freqHz: Double) {
-    val durationMs = 300
+fun playTone(freq: Double) {
+    val durationMs = 500
     val sampleRate = 44100
     val numSamples = durationMs * sampleRate / 1000
     val sample = DoubleArray(numSamples)
     val buffer = ShortArray(numSamples)
 
     for (i in 0 until numSamples) {
-        sample[i] = sin(2.0 * Math.PI * i.toDouble() / (sampleRate.toDouble() / freqHz))
+        sample[i] = sin(2.0 * Math.PI * i.toDouble() / (sampleRate / freq))
         buffer[i] = (sample[i] * Short.MAX_VALUE).toInt().toShort()
     }
 
-    val audioTrack = AudioTrack.Builder()
-        .setAudioAttributes(AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-            .build())
-        .setAudioFormat(AudioFormat.Builder()
-            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-            .setSampleRate(sampleRate)
-            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-            .build())
+    val track = AudioTrack.Builder()
+        .setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build()
+        )
+        .setAudioFormat(
+            AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(sampleRate)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .build()
+        )
         .setBufferSizeInBytes(numSamples * 2)
         .build()
 
-    audioTrack.play()
-    audioTrack.write(buffer, 0, numSamples)
-    audioTrack.stop()
-    audioTrack.release()
+    track.play()
+    track.write(buffer, 0, numSamples)
+    track.stop()
+    track.release()
 }
