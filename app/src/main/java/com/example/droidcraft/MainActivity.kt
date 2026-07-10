@@ -6,66 +6,101 @@ import android.media.AudioTrack
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
-import kotlinx.coroutines.*
-import kotlin.math.sin
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.PI
+import kotlin.math.sin
+import kotlin.math.pow
 
-// Constants for audio synthesis
-const val SAMPLE_RATE = 44100 // Hz
-const val DURATION_SEC = 0.1 // Duration of each generated buffer segment to write
-const val AMPLITUDE = Short.MAX_VALUE.toFloat() * 0.5f // Max amplitude for 16-bit PCM
+// Constants for audio generation
+private const val SAMPLE_RATE = 44100
+private const val BUFFER_SIZE = SAMPLE_RATE / 4 // 1/4 second buffer
+private const val MAX_VOLUME = 32767 // Max value for 16-bit PCM
 
-// Enum for musical notes and their fundamental frequencies (in Hz)
-enum class Note(val frequency: Double, val isSharp: Boolean = false) {
-    C4(261.63), CSharp4(277.18, true), D4(293.66), DSharp4(311.13, true), E4(329.63), F4(349.23),
-    FSharp4(369.99, true), G4(392.00), GSharp4(415.30, true), A4(440.00), ASharp4(466.16, true), B4(493.88),
-    C5(523.25), CSharp5(554.37, true), D5(587.33), DSharp5(622.25, true), E5(659.25), F5(698.46),
-    FSharp5(739.99, true), G5(783.99), GSharp5(830.61, true), A5(880.00), ASharp5(932.33, true), B5(987.77);
+// A simple sine wave oscillator with ADSR-like decay
+class Oscillator(private val frequency: Double, private val sampleRate: Int) {
+    private var phase = 0.0
+    private var amplitude = 0.0 // Current amplitude
+    private var targetAmplitude = 0.0 // Target amplitude (1.0 for pressed, 0.0 for released)
+    private val attackTimeSamples = (0.01 * sampleRate).toInt() // 10ms attack
+    private val decayTimeSamples = (0.05 * sampleRate).toInt() // 50ms decay
+    private var attackCounter = 0
+    private var decayCounter = 0
 
-    // Helper to determine if a note is 'white' or 'black' based on its sharp property
-    val isWhite: Boolean get() = !isSharp
-}
+    fun start() {
+        targetAmplitude = 1.0
+        attackCounter = 0
+        decayCounter = 0 // Reset decay if note is re-pressed during decay
+    }
 
-class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContent {
-            // Apply MaterialTheme for consistent styling
-            MaterialTheme {
-                MainAppScreen()
+    fun release() {
+        targetAmplitude = 0.0
+        decayCounter = 0
+    }
+
+    fun getNextSample(): Short {
+        // Update amplitude based on attack/decay
+        if (targetAmplitude > amplitude) { // Attack phase
+            if (attackCounter < attackTimeSamples) {
+                attackCounter++
+                amplitude = (attackCounter.toDouble() / attackTimeSamples)
+            } else {
+                amplitude = targetAmplitude // Reached target
+            }
+        } else if (targetAmplitude < amplitude) { // Decay phase
+            if (decayCounter < decayTimeSamples) {
+                decayCounter++
+                amplitude = (1.0 - (decayCounter.toDouble() / decayTimeSamples)).coerceAtLeast(0.0) // Ensure not negative
+            } else {
+                amplitude = targetAmplitude // Reached target (0)
             }
         }
+
+        if (amplitude <= 0.001) { // Effectively silent
+            return 0
+        }
+
+        phase += 2 * PI * frequency / sampleRate
+        if (phase > 2 * PI) {
+            phase -= 2 * PI
+        }
+        val sample = (amplitude * sin(phase) * MAX_VOLUME).toInt()
+        return sample.toShort()
+    }
+
+    fun isActive(): Boolean {
+        // Oscillator is active if it's playing or still decaying
+        return amplitude > 0.001 || targetAmplitude > 0.001
     }
 }
 
-// Singleton object to manage AudioTrack lifecycle and sound playback
-object SoundPlayer {
+class SoundGenerator {
     private var audioTrack: AudioTrack? = null
-    private val bufferSize = AudioTrack.getMinBufferSize(
-        SAMPLE_RATE,
-        AudioFormat.CHANNEL_OUT_MONO,
-        AudioFormat.ENCODING_PCM_16BIT
-    )
-
-    private val playerScope = CoroutineScope(Dispatchers.IO) // Coroutine scope for audio playback
-    private val activeNoteJobs = mutableMapOf<Note, Job>() // Tracks currently playing notes
+    private val isPlaying = AtomicBoolean(false)
+    private var audioThread: Thread? = null
+    private val activeOscillators = ConcurrentHashMap<Double, Oscillator>()
 
     init {
-        // Initialize AudioTrack for streaming PCM audio
+        val minBufferSize = AudioTrack.getMinBufferSize(
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
         audioTrack = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -80,176 +115,205 @@ object SoundPlayer {
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                     .build()
             )
-            .setBufferSizeInBytes(bufferSize)
+            .setBufferSizeInBytes(minBufferSize)
             .setMode(AudioTrack.MODE_STREAM)
             .build()
-
-        audioTrack?.play() // Start the AudioTrack to prepare for playback
     }
 
-    /**
-     * Generates a short segment of a sine wave for a given frequency.
-     */
-    private fun generateSineWave(frequency: Double): ShortArray {
-        val numSamples = (SAMPLE_RATE * DURATION_SEC).toInt()
-        val samples = ShortArray(numSamples)
-        for (i in 0 until numSamples) {
-            val sample = (AMPLITUDE * sin(2 * PI * frequency * i / SAMPLE_RATE)).toInt()
-            samples[i] = sample.toShort()
-        }
-        return samples
-    }
+    fun start() {
+        if (!isPlaying.getAndSet(true)) {
+            audioTrack?.play()
+            audioThread = Thread {
+                val buffer = ShortArray(BUFFER_SIZE)
+                while (isPlaying.get()) {
+                    var bufferFilled = false
+                    for (i in 0 until BUFFER_SIZE) {
+                        var mixedSample = 0.0
+                        // Iterate over a copy of keys to avoid ConcurrentModificationException if notes are added/removed
+                        val currentActiveFrequencies = activeOscillators.keys.toList()
+                        var activeCount = 0
 
-    /**
-     * Starts playing a note continuously until explicitly stopped.
-     * Each note's playback runs in its own coroutine.
-     */
-    fun playNote(note: Note) {
-        // If the note is already playing, do nothing to avoid multiple jobs for the same note
-        if (activeNoteJobs.containsKey(note)) {
-            return
-        }
+                        for (freq in currentActiveFrequencies) {
+                            val osc = activeOscillators[freq]
+                            if (osc != null) {
+                                val sample = osc.getNextSample()
+                                if (osc.isActive()) {
+                                    mixedSample += sample
+                                    activeCount++
+                                } else {
+                                    activeOscillators.remove(freq) // Remove silent oscillators
+                                }
+                            }
+                        }
 
-        val job = playerScope.launch {
-            audioTrack?.apply {
-                try {
-                    val audioData = generateSineWave(note.frequency)
-                    // Continuously write audio data while the coroutine is active
-                    while (isActive) {
-                        write(audioData, 0, audioData.size)
+                        // Simple normalization to prevent clipping if multiple notes are active
+                        if (activeCount > 1) {
+                            mixedSample /= activeCount.toDouble()
+                        }
+
+                        buffer[i] = mixedSample.coerceIn(-MAX_VOLUME.toDouble(), MAX_VOLUME.toDouble()).toShort()
+                        if (mixedSample.toInt() != 0) bufferFilled = true
                     }
-                } catch (e: Exception) {
-                    // Handle potential audio track errors (e.g., track released)
-                    e.printStackTrace()
+                    if (bufferFilled) { // Only write if there's actual sound
+                        audioTrack?.write(buffer, 0, BUFFER_SIZE)
+                    } else {
+                        // If no notes are active and buffer is silent, pause briefly to save CPU
+                        Thread.sleep(10)
+                    }
                 }
+                audioTrack?.stop()
+                audioTrack?.release()
+                audioTrack = null
             }
+            audioThread?.start()
         }
-        activeNoteJobs[note] = job
     }
 
-    /**
-     * Stops the playback of a specific note.
-     */
-    fun stopNote(note: Note) {
-        activeNoteJobs[note]?.cancel() // Cancel the coroutine for this note
-        activeNoteJobs.remove(note)
+    fun stop() {
+        if (isPlaying.getAndSet(false)) {
+            // Signal the thread to stop and wait for it to finish
+            audioThread?.join()
+            audioThread = null
+            activeOscillators.clear()
+        }
     }
 
-    /**
-     * Releases all resources held by the SoundPlayer.
-     * Should be called when the audio player is no longer needed (e.g., app exits).
-     */
-    fun release() {
-        playerScope.cancel() // Cancel all ongoing playback jobs
-        audioTrack?.stop() // Stop the audio track
-        audioTrack?.release() // Release native resources
-        audioTrack = null
+    fun playNote(frequency: Double) {
+        // Get or create an oscillator for this frequency
+        val osc = activeOscillators.computeIfAbsent(frequency) {
+            Oscillator(frequency, SAMPLE_RATE)
+        }
+        osc.start()
+    }
+
+    fun releaseNote(frequency: Double) {
+        activeOscillators[frequency]?.release()
+    }
+}
+
+class MainActivity : ComponentActivity() {
+    private val soundGenerator = SoundGenerator() // Instantiate once
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            MainAppScreen(soundGenerator)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        soundGenerator.start() // Start audio generation when activity resumes
+    }
+
+    override fun onPause() {
+        super.onPause()
+        soundGenerator.stop() // Stop audio generation when activity pauses
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        soundGenerator.stop() // Ensure generator is stopped if app is destroyed
     }
 }
 
 @Composable
-fun MainAppScreen() {
-    val coroutineScope = rememberCoroutineScope() // Scope for launching suspend functions
+fun MainAppScreen(soundGenerator: SoundGenerator) {
+    val coroutineScope = rememberCoroutineScope()
 
-    // Ensure audio resources are released when the MainAppScreen leaves composition
-    DisposableEffect(Unit) {
-        onDispose {
-            SoundPlayer.release()
-        }
+    // Define piano notes and their frequencies
+    val c4 = 261.63 // Middle C
+    val notes = remember {
+        listOf(
+            "C4" to c4,
+            "C#4" to c4 * 2.0.pow(1.0/12.0),
+            "D4" to c4 * 2.0.pow(2.0/12.0),
+            "D#4" to c4 * 2.0.pow(3.0/12.0),
+            "E4" to c4 * 2.0.pow(4.0/12.0),
+            "F4" to c4 * 2.0.pow(5.0/12.0),
+            "F#4" to c4 * 2.0.pow(6.0/12.0),
+            "G4" to c4 * 2.0.pow(7.0/12.0),
+            "G#4" to c4 * 2.0.pow(8.0/12.0),
+            "A4" to c4 * 2.0.pow(9.0/12.0),
+            "A#4" to c4 * 2.0.pow(10.0/12.0),
+            "B4" to c4 * 2.0.pow(11.0/12.0),
+            "C5" to c4 * 2.0.pow(12.0/12.0)
+        )
     }
 
     Column(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
         Text(
             text = "DroidCraft Piano",
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(16.dp)
+            fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.headlineLarge
         )
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(32.dp))
 
-        // Composable for the piano keyboard layout
-        PianoKeyboard(coroutineScope)
-    }
-}
-
-@Composable
-fun PianoKeyboard(coroutineScope: CoroutineScope) {
-    // Define the white notes to be displayed on the keyboard
-    val whiteNotes = listOf(
-        Note.C4, Note.D4, Note.E4, Note.F4, Note.G4, Note.A4, Note.B4,
-        Note.C5, Note.D5, Note.E5, Note.F5, Note.G5, Note.A5, Note.B5
-    )
-
-    // Define the black notes
-    val blackNotes = listOf(
-        Note.CSharp4, Note.DSharp4,
-        Note.FSharp4, Note.GSharp4, Note.ASharp4,
-        Note.CSharp5, Note.DSharp5,
-        Note.FSharp5, Note.GSharp5, Note.ASharp5
-    )
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth(0.9f) // Occupy 90% of screen width
-            .height(200.dp) // Fixed height for the keyboard
-            .border(2.dp, Color.Black, RoundedCornerShape(8.dp))
-            .background(Color.LightGray, RoundedCornerShape(8.dp))
-    ) {
-        // Layer 1: White keys
-        Row(modifier = Modifier.fillMaxSize()) {
-            whiteNotes.forEach { note ->
-                PianoKey(
-                    note = note,
-                    modifier = Modifier
-                        .weight(1f) // Each white key takes equal horizontal space
-                        .fillMaxHeight(),
-                    coroutineScope = coroutineScope
-                )
-            }
-        }
-
-        // Layer 2: Black keys (positioned using BoxWithConstraints and offset)
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val totalWidth = maxWidth
-            val whiteKeyWidth = totalWidth / whiteNotes.size.toFloat() // Calculate individual white key width
-            val blackKeyWidth = whiteKeyWidth * 0.6f // Black keys are narrower than white keys
-
-            // Map black notes to their preceding white note for positioning logic
-            val blackKeyPositions = mapOf(
-                Note.CSharp4 to Note.C4,
-                Note.DSharp4 to Note.D4,
-                Note.FSharp4 to Note.F4,
-                Note.GSharp4 to Note.G4,
-                Note.ASharp4 to Note.A4,
-                Note.CSharp5 to Note.C5,
-                Note.DSharp5 to Note.D5,
-                Note.FSharp5 to Note.F5,
-                Note.GSharp5 to Note.G5,
-                Note.ASharp5 to Note.A5
-            )
-
-            blackKeyPositions.forEach { (blackNote, whiteNoteBefore) ->
-                val whiteKeyIndex = whiteNotes.indexOf(whiteNoteBefore)
-                if (whiteKeyIndex != -1) {
-                    // Calculate x-offset: centered over the gap between whiteNoteBefore and the next white note
-                    // A physical piano usually shifts black keys slightly right of the exact center of the gap.
-                    // This approximation places the left edge of the black key at (whiteKeyIndex + 0.75) * whiteKeyWidth
-                    // minus half the black key width to center it visually.
-                    val xOffset = (whiteKeyIndex + 0.75f) * whiteKeyWidth - (blackKeyWidth / 2)
-
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(200.dp) // Height of the entire keyboard area
+                .align(Alignment.CenterHorizontally)
+        ) {
+            // White keys layer
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .align(Alignment.BottomCenter), // Align white keys to the bottom of the box
+                horizontalArrangement = Arrangement.Center
+            ) {
+                val whiteKeys = notes.filter { !it.first.contains("#") }
+                whiteKeys.forEach { (label, freq) ->
                     PianoKey(
-                        note = blackNote,
-                        modifier = Modifier
-                            .offset(x = xOffset) // Apply horizontal offset
-                            .width(blackKeyWidth) // Set black key's width
-                            .fillMaxHeight(0.6f) // Black keys are typically shorter
-                            .zIndex(2f), // Ensure black keys are rendered above white keys
-                        coroutineScope = coroutineScope
+                        label = label,
+                        frequency = freq,
+                        isSharp = false,
+                        onNotePressed = { frequency -> coroutineScope.launch { withContext(Dispatchers.Default) { soundGenerator.playNote(frequency) } } },
+                        onNoteReleased = { frequency -> coroutineScope.launch { withContext(Dispatchers.Default) { soundGenerator.releaseNote(frequency) } } }
                     )
                 }
+            }
+
+            // Black keys layer, slightly offset and narrower
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(120.dp) // Black keys are shorter
+                    .align(Alignment.TopCenter) // Align black keys to the top of the box
+                    .offset(y = (-20).dp), // Slight vertical adjustment to overlap white keys more
+                horizontalArrangement = Arrangement.Center // Center the black keys row
+            ) {
+                // Approximate width of a white key and black key for spacing.
+                // These values are for visual alignment to place black keys over gaps.
+                val whiteKeyVisualWidth = 54.dp // 50.dp key + 4.dp horizontal padding for white keys
+                val blackKeyVisualWidth = 30.dp // 30.dp key
+                val offsetForCsharp = (whiteKeyVisualWidth / 2) + 2.dp // Center C# between C and D, adjusted for padding
+
+                Spacer(modifier = Modifier.width(offsetForCsharp)) // Before C#
+                notes.filter { it.first == "C#4" }.forEach { (label, freq) ->
+                    PianoKey(label = label, frequency = freq, isSharp = true, onNotePressed = { f -> coroutineScope.launch { withContext(Dispatchers.Default) { soundGenerator.playNote(f) } } }, onNoteReleased = { f -> coroutineScope.launch { withContext(Dispatchers.Default) { soundGenerator.releaseNote(f) } } })
+                }
+                Spacer(modifier = Modifier.width(whiteKeyVisualWidth - blackKeyVisualWidth)) // Between C# and D#
+                notes.filter { it.first == "D#4" }.forEach { (label, freq) ->
+                    PianoKey(label = label, frequency = freq, isSharp = true, onNotePressed = { f -> coroutineScope.launch { withContext(Dispatchers.Default) { soundGenerator.playNote(f) } } }, onNoteReleased = { f -> coroutineScope.launch { withContext(Dispatchers.Default) { soundGenerator.releaseNote(f) } } })
+                }
+                Spacer(modifier = Modifier.width((whiteKeyVisualWidth * 2) - blackKeyVisualWidth)) // Between D# and F# (skips E)
+                notes.filter { it.first == "F#4" }.forEach { (label, freq) ->
+                    PianoKey(label = label, frequency = freq, isSharp = true, onNotePressed = { f -> coroutineScope.launch { withContext(Dispatchers.Default) { soundGenerator.playNote(f) } } }, onNoteReleased = { f -> coroutineScope.launch { withContext(Dispatchers.Default) { soundGenerator.releaseNote(f) } } })
+                }
+                Spacer(modifier = Modifier.width(whiteKeyVisualWidth - blackKeyVisualWidth)) // Between F# and G#
+                notes.filter { it.first == "G#4" }.forEach { (label, freq) ->
+                    PianoKey(label = label, frequency = freq, isSharp = true, onNotePressed = { f -> coroutineScope.launch { withContext(Dispatchers.Default) { soundGenerator.playNote(f) } } }, onNoteReleased = { f -> coroutineScope.launch { withContext(Dispatchers.Default) { soundGenerator.releaseNote(f) } } })
+                }
+                Spacer(modifier = Modifier.width(whiteKeyVisualWidth - blackKeyVisualWidth)) // Between G# and A#
+                notes.filter { it.first == "A#4" }.forEach { (label, freq) ->
+                    PianoKey(label = label, frequency = freq, isSharp = true, onNotePressed = { f -> coroutineScope.launch { withContext(Dispatchers.Default) { soundGenerator.playNote(f) } } }, onNoteReleased = { f -> coroutineScope.launch { withContext(Dispatchers.Default) { soundGenerator.releaseNote(f) } } })
+                }
+                Spacer(modifier = Modifier.width(offsetForCsharp)) // After A#
             }
         }
     }
@@ -257,45 +321,61 @@ fun PianoKeyboard(coroutineScope: CoroutineScope) {
 
 @Composable
 fun PianoKey(
-    note: Note,
-    modifier: Modifier = Modifier,
-    coroutineScope: CoroutineScope // Coroutine scope for LaunchedEffect
+    label: String,
+    frequency: Double,
+    isSharp: Boolean,
+    onNotePressed: (Double) -> Unit,
+    onNoteReleased: (Double) -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
-    // Collect the press state to detect when a key is pressed down or released
     val isPressed by interactionSource.collectIsPressedAsState()
 
-    // Use LaunchedEffect to react to changes in the pressed state
     LaunchedEffect(isPressed) {
         if (isPressed) {
-            SoundPlayer.playNote(note) // Start playing the note
+            onNotePressed(frequency)
         } else {
-            SoundPlayer.stopNote(note) // Stop playing the note
+            onNoteReleased(frequency)
         }
     }
 
-    // Determine key color based on note type and pressed state
-    val keyColor = if (note.isWhite) {
-        if (isPressed) Color.LightGray else Color.White
-    } else {
-        if (isPressed) Color.DarkGray else Color.Black
+    val backgroundColor = when {
+        isSharp -> if (isPressed) Color(0xFF333333) else Color.Black
+        isPressed -> Color.LightGray
+        else -> Color.White
     }
-    val borderColor = Color.Black // All keys have black borders
+    val textColor = if (isSharp) Color.White else Color.Black
+    val keyWidth = if (isSharp) 30.dp else 50.dp
+    val keyHeight = if (isSharp) 120.dp else 180.dp // White keys taller
+    val elevation = if (isPressed) 2.dp else 8.dp
 
     Surface(
-        modifier = modifier
-            // Add slight padding for white keys to create visual separation
-            .padding(if (note.isWhite) 0.5.dp else 0.dp)
-            .background(keyColor, RoundedCornerShape(2.dp))
-            .border(0.5.dp, borderColor, RoundedCornerShape(2.dp))
-            // Make the Surface clickable and associate with interactionSource
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null // Disable ripple effect for piano keys
-            ) {},
-        color = keyColor // Set the background color of the Surface itself
+        modifier = Modifier
+            .width(keyWidth)
+            .height(keyHeight)
+            .padding(horizontal = if (isSharp) 0.dp else 2.dp), // Horizontal padding for white keys to give separation
+        shape = MaterialTheme.shapes.small,
+        color = backgroundColor,
+        shadowElevation = elevation,
+        interactionSource = interactionSource,
+        onClick = { /* No action on simple click, only press/release */ }
     ) {
-        // No explicit content inside the key, the color and interaction are sufficient.
-        // You could add Text for note labels here if desired.
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.BottomCenter
+        ) {
+            Text(
+                text = label,
+                color = textColor,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+        }
     }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun PreviewMainAppScreen() {
+    MainAppScreen(soundGenerator = SoundGenerator()) // Provide a mock or dummy SoundGenerator for preview
 }
