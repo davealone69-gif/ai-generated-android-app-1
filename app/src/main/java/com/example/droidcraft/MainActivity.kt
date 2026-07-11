@@ -6,205 +6,73 @@ import android.media.AudioTrack
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlin.math.sin
-import kotlin.math.pow
 
-// Constants for audio generation
-private const val SAMPLE_RATE = 44100 // samples per second
-private const val DURATION_MS_PER_CLICK = 300 // milliseconds
-private const val AMPLITUDE_MAX = Short.MAX_VALUE.toFloat() * 0.7f // Max amplitude for 16-bit PCM, slightly reduced to avoid clipping
+// Object for custom sound synthesis using AudioTrack
+object AudioSynth {
+    private const val SAMPLE_RATE = 44100 // Hz
+    private const val DURATION_MS = 300 // milliseconds for each note
+    private const val VOLUME = 0.3 // Amplitude multiplier (0.0 to 1.0)
 
-// Helper function to calculate frequency for a given MIDI note number
-// A4 is MIDI note 69, 440 Hz
-private fun midiNoteToFrequency(midiNote: Int): Float {
-    return 440.0f * (2.0f.pow((midiNote - 69) / 12.0f))
+    fun playTone(frequency: Double) {
+        // Run audio generation and playback on a background thread
+        Thread {
+            val numSamples = (DURATION_MS * SAMPLE_RATE / 1000)
+            val generatedSound = ShortArray(numSamples)
+
+            // Generate a sine wave
+            for (i in 0 until numSamples) {
+                generatedSound[i] = (Short.MAX_VALUE * VOLUME * Math.sin(2 * Math.PI * frequency * i / SAMPLE_RATE)).toShort()
+            }
+
+            val minBufferSize = AudioTrack.getMinBufferSize(
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+
+            // Create and configure AudioTrack
+            val audioTrack = AudioTrack(
+                AudioManager.STREAM_MUSIC,
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                minBufferSize,
+                AudioTrack.MODE_STREAM
+            )
+
+            try {
+                audioTrack.play()
+                audioTrack.write(generatedSound, 0, generatedSound.size)
+            } finally {
+                audioTrack.stop()
+                audioTrack.release()
+            }
+        }.start()
+    }
 }
 
 class MainActivity : ComponentActivity() {
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MainAppScreen()
-        }
-    }
-}
-
-@Composable
-fun MainAppScreen() {
-    // Flow to send note events to the sound synthesis coroutine
-    val noteEventFlow = remember { MutableSharedFlow<Float>(extraBufferCapacity = 64) }
-
-    // AudioTrack instance and coroutine management
-    val coroutineScope = rememberCoroutineScope()
-    var audioTrack: AudioTrack? by remember { mutableStateOf(null) }
-
-    // Lifecycle observer to manage AudioTrack
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) { // Initialize on resume
-                if (audioTrack == null) {
-                    val minBufferSize = AudioTrack.getMinBufferSize(
-                        SAMPLE_RATE,
-                        AudioFormat.CHANNEL_OUT_MONO,
-                        AudioFormat.ENCODING_PCM_16BIT
-                    )
-                    audioTrack = AudioTrack(
-                        AudioManager.STREAM_MUSIC,
-                        SAMPLE_RATE,
-                        AudioFormat.CHANNEL_OUT_MONO,
-                        AudioFormat.ENCODING_PCM_16BIT,
-                        minBufferSize * 2, // Double buffer size for smoother streaming
-                        AudioTrack.MODE_STREAM
-                    ).apply { play() }
-
-                    // Launch a coroutine to process note events and play sound
-                    coroutineScope.launch(Dispatchers.IO) { // Use IO dispatcher for audio writing
-                        noteEventFlow.collect { frequency ->
-                            audioTrack?.let { track ->
-                                val numSamples = (SAMPLE_RATE * DURATION_MS_PER_CLICK / 1000f).toInt()
-                                val samples = ShortArray(numSamples)
-                                // Generate sine wave samples for the given frequency
-                                for (i in 0 until numSamples) {
-                                    val angle = 2 * Math.PI * frequency * (i.toDouble() / SAMPLE_RATE)
-                                    val sample = (AMPLITUDE_MAX * sin(angle)).toInt()
-                                    samples[i] = sample.toShort()
-                                }
-                                // Write the samples to the AudioTrack
-                                track.write(samples, 0, samples.size)
-                            }
-                        }
-                    }
-                }
-            } else if (event == Lifecycle.Event.ON_PAUSE) { // Release on pause
-                audioTrack?.stop()
-                audioTrack?.release()
-                audioTrack = null
-                coroutineScope.cancel() // Cancel the coroutine scope when paused/destroyed
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            audioTrack?.stop()
-            audioTrack?.release()
-            audioTrack = null
-            coroutineScope.cancel()
-        }
-    }
-
-    Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(
-                title = { Text("DroidCraft Piano", fontWeight = FontWeight.Bold) }
-            )
-        }
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .padding(horizontal = 8.dp, vertical = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                text = "Tap a key to play a note!",
-                style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.padding(bottom = 24.dp)
-            )
-
-            // Piano Keyboard Layout
-            BoxWithConstraints(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .wrapContentHeight()
-            ) {
-                val whiteKeyWidth = 48.dp
-                val whiteKeyHeight = 180.dp
-                val blackKeyWidth = 32.dp
-                val blackKeyHeight = 120.dp
-
-                val totalWhiteKeys = 8 // C4-C5
-                val totalWhiteKeyboardWidth = totalWhiteKeys * whiteKeyWidth
-                val startOffsetForCentering = (maxWidth - totalWhiteKeyboardWidth) / 2
-
-                // Layer 1: White Keys
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .offset(x = startOffsetForCentering), // Offset to center the white keys
-                    horizontalArrangement = Arrangement.Start // Start from the calculated offset
-                ) {
-                    val whiteKeyMidiNotes = listOf(60, 62, 64, 65, 67, 69, 71, 72) // C4, D4, E4, F4, G4, A4, B4, C5
-                    whiteKeyMidiNotes.forEach { midiNote ->
-                        val frequency = midiNoteToFrequency(midiNote)
-                        PianoKey(
-                            isBlack = false,
-                            midiNote = midiNote,
-                            width = whiteKeyWidth,
-                            height = whiteKeyHeight,
-                            onKeyPress = {
-                                coroutineScope.launch { noteEventFlow.emit(frequency) }
-                            }
-                        )
-                    }
-                }
-
-                // Layer 2: Black Keys
-                val blackKeyMidiNotes = listOf(61, 63, 66, 68, 70) // C#4, D#4, F#4, G#4, A#4
-
-                // Calculate horizontal offsets for black keys relative to the start of the first white key
-                val blackKeyOffsets = listOf(
-                    (whiteKeyWidth - blackKeyWidth / 2),                 // C# after C (index 0)
-                    (whiteKeyWidth * 2 - blackKeyWidth / 2),             // D# after D (index 1)
-                    (whiteKeyWidth * 4 - blackKeyWidth / 2),             // F# after F (index 3)
-                    (whiteKeyWidth * 5 - blackKeyWidth / 2),             // G# after G (index 4)
-                    (whiteKeyWidth * 6 - blackKeyWidth / 2)              // A# after A (index 5)
-                )
-
-                blackKeyMidiNotes.forEachIndexed { index, midiNote ->
-                    val frequency = midiNoteToFrequency(midiNote)
-                    Box(
-                        modifier = Modifier
-                            .offset(
-                                x = startOffsetForCentering + blackKeyOffsets[index],
-                                y = 0.dp // Black keys visually start at the same vertical origin as white keys
-                            )
-                    ) {
-                        PianoKey(
-                            isBlack = true,
-                            midiNote = midiNote,
-                            width = blackKeyWidth,
-                            height = blackKeyHeight,
-                            onKeyPress = {
-                                coroutineScope.launch { noteEventFlow.emit(frequency) }
-                            }
-                        )
-                    }
-                }
+            // Apply Material3 theme (assuming default theme is provided by the project template)
+            MaterialTheme {
+                MainAppScreen()
             }
         }
     }
@@ -212,43 +80,167 @@ fun MainAppScreen() {
 
 @Composable
 fun PianoKey(
-    isBlack: Boolean,
-    midiNote: Int,
-    width: Dp,
-    height: Dp,
-    onKeyPress: () -> Unit
+    noteFrequency: Double,
+    label: String,
+    modifier: Modifier = Modifier,
+    isBlackKey: Boolean = false,
+    keyWidth: Dp
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
+    var isPressed by remember { mutableStateOf(false) }
 
-    val keyColor = if (isBlack) Color.Black else Color.White
-    val pressedColor = if (isBlack) Color.DarkGray else Color.LightGray
+    val keyColor = when {
+        isPressed && isBlackKey -> Color(0xFF333333) // Darker black when pressed
+        isPressed && !isBlackKey -> Color(0xFFCCCCCC) // Darker white when pressed
+        isBlackKey -> Color.Black
+        else -> Color.White
+    }
+    val textColor = if (isBlackKey) Color.White else Color.Black
 
-    val textColor = if (isBlack) Color.White.copy(alpha = 0.8f) else Color.DarkGray.copy(alpha = 0.8f)
-
-    Box(
-        modifier = Modifier
-            .width(width)
-            .height(height)
-            .background(if (isPressed) pressedColor else keyColor, shape = RoundedCornerShape(4.dp))
-            .border(1.dp, Color.DarkGray, shape = RoundedCornerShape(4.dp))
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null, // No ripple effect for piano keys
-                onClick = onKeyPress
-            )
+    Surface(
+        color = keyColor,
+        modifier = modifier
+            .width(keyWidth)
+            .padding(2.dp)
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onPress = {
+                        isPressed = true
+                        AudioSynth.playTone(noteFrequency)
+                        tryAwaitRelease()
+                        isPressed = false
+                    }
+                )
+            },
+        shape = MaterialTheme.shapes.small,
+        border = BorderStroke(1.dp, Color.DarkGray)
     ) {
-        val noteNames = listOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-        val octave = (midiNote / 12) - 1 // MIDI note 60 (C4) -> octave 4
-        val noteName = noteNames[midiNote % 12] + octave
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.BottomCenter
+        ) {
+            Text(
+                text = label,
+                color = textColor,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+        }
+    }
+}
 
-        Text(
-            text = noteName,
-            color = textColor,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 8.dp),
-            style = MaterialTheme.typography.labelSmall
+@Composable
+fun MainAppScreen() {
+    val noteFrequencies = remember {
+        mapOf(
+            "C4" to 261.63,
+            "C#4" to 277.18,
+            "D4" to 293.66,
+            "D#4" to 311.13,
+            "E4" to 329.63,
+            "F4" to 349.23,
+            "F#4" to 369.99,
+            "G4" to 392.00,
+            "G#4" to 415.30,
+            "A4" to 440.00,
+            "A#4" to 466.16,
+            "B4" to 493.88,
+            "C5" to 523.25
         )
+    }
+
+    val whiteKeyLabels = remember { listOf("C4", "D4", "E4", "F4", "G4", "A4", "B4", "C5") }
+    val whiteKeyWidth = 60.dp
+    val blackKeyWidth = 40.dp
+    val keyboardHeight = 200.dp
+    val blackKeyHeight = (keyboardHeight.value * 0.6f).dp
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = "DroidCraft Piano",
+            fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.headlineMedium,
+            modifier = Modifier.padding(bottom = 24.dp)
+        )
+
+        // Main Box to hold all keys, enabling layering for black keys
+        Box(
+            modifier = Modifier
+                .wrapContentSize(align = Alignment.TopStart) // Adjusts size to content, aligns top-left
+                .height(keyboardHeight)
+                .border(1.dp, Color.DarkGray, MaterialTheme.shapes.small)
+        ) {
+            // White keys layout
+            Row(modifier = Modifier.fillMaxHeight()) {
+                whiteKeyLabels.forEach { noteName ->
+                    PianoKey(
+                        noteFrequency = noteFrequencies.getValue(noteName),
+                        label = noteName,
+                        modifier = Modifier.fillMaxHeight(),
+                        isBlackKey = false,
+                        keyWidth = whiteKeyWidth
+                    )
+                }
+            }
+
+            // Black keys layout (overlayed using offsets)
+            val halfBlackKeyOffset = blackKeyWidth / 2
+
+            // C#4 key (between C4 and D4)
+            PianoKey(
+                noteFrequency = noteFrequencies.getValue("C#4"),
+                label = "C#4",
+                modifier = Modifier
+                    .offset(x = whiteKeyWidth - halfBlackKeyOffset)
+                    .height(blackKeyHeight),
+                isBlackKey = true,
+                keyWidth = blackKeyWidth
+            )
+            // D#4 key (between D4 and E4)
+            PianoKey(
+                noteFrequency = noteFrequencies.getValue("D#4"),
+                label = "D#4",
+                modifier = Modifier
+                    .offset(x = (whiteKeyWidth * 2) - halfBlackKeyOffset)
+                    .height(blackKeyHeight),
+                isBlackKey = true,
+                keyWidth = blackKeyWidth
+            )
+            // F#4 key (between F4 and G4)
+            PianoKey(
+                noteFrequency = noteFrequencies.getValue("F#4"),
+                label = "F#4",
+                modifier = Modifier
+                    .offset(x = (whiteKeyWidth * 4) - halfBlackKeyOffset)
+                    .height(blackKeyHeight),
+                isBlackKey = true,
+                keyWidth = blackKeyWidth
+            )
+            // G#4 key (between G4 and A4)
+            PianoKey(
+                noteFrequency = noteFrequencies.getValue("G#4"),
+                label = "G#4",
+                modifier = Modifier
+                    .offset(x = (whiteKeyWidth * 5) - halfBlackKeyOffset)
+                    .height(blackKeyHeight),
+                isBlackKey = true,
+                keyWidth = blackKeyWidth
+            )
+            // A#4 key (between A4 and B4)
+            PianoKey(
+                noteFrequency = noteFrequencies.getValue("A#4"),
+                label = "A#4",
+                modifier = Modifier
+                    .offset(x = (whiteKeyWidth * 6) - halfBlackKeyOffset)
+                    .height(blackKeyHeight),
+                isBlackKey = true,
+                keyWidth = blackKeyWidth
+            )
+        }
     }
 }
