@@ -3,10 +3,10 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 android {
-    namespace = "com.example.droidcraft"
+    namespace = "com.davealone69.everything4droid"
     compileSdk = 34
     defaultConfig {
-        applicationId = "com.example.droidcraft"
+        applicationId = "com.davealone69.everything4droid"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
