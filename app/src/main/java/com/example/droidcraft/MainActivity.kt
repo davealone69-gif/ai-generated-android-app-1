@@ -1,772 +1,513 @@
 package com.example.droidcraft
 
+import android.media.AudioAttributes
 import android.media.AudioFormat
-import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import java.util.concurrent.Executors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.asin
-import kotlin.math.floor
+import kotlin.math.abs
 import kotlin.math.sin
+import kotlin.math.PI
+import kotlin.math.pow
+
+enum class WaveType {
+    SINE, SQUARE, TRIANGLE, SAWTOOTH
+}
+
+class SynthEngine {
+    private val executor = Executors.newCachedThreadPool()
+    private val sampleRate = 22050 // Optimized standard sample rate for instant synth generation
+
+    fun playNote(freq: Double, type: WaveType, durationMs: Int, volume: Float) {
+        executor.execute {
+            try {
+                val numSamples = (sampleRate * (durationMs / 1000.0)).toInt()
+                val buffer = ByteArray(numSamples * 2)
+                
+                for (i in 0 until numSamples) {
+                    val t = i.toDouble() / sampleRate
+                    val angle = 2.0 * PI * freq * t
+                    val rawSample = when (type) {
+                        WaveType.SINE -> sin(angle)
+                        WaveType.SQUARE -> if (sin(angle) >= 0) 0.5 else -0.5
+                        WaveType.TRIANGLE -> 2.0 * abs(2.0 * ((angle / (2.0 * PI)) % 1.0 - 0.5)) - 1.0
+                        WaveType.SAWTOOTH -> 2.0 * ((angle / (2.0 * PI)) % 1.0 - 0.5)
+                    }
+                    
+                    // Linear ADSR envelope (Attack and Release only for simplicity and latency removal)
+                    val attackSamples = (sampleRate * 0.03).toInt() // 30ms attack
+                    val releaseSamples = (sampleRate * 0.15).toInt() // 150ms release
+                    val envelope = when {
+                        i < attackSamples -> i.toFloat() / attackSamples
+                        i > numSamples - releaseSamples -> (numSamples - i).toFloat() / releaseSamples
+                        else -> 1.0f
+                    }
+                    
+                    val sampleValue = (rawSample * envelope * 32767 * volume * 0.5).toInt().coerceIn(-32768, 32767)
+                    buffer[i * 2] = (sampleValue and 0xFF).toByte()
+                    buffer[i * 2 + 1] = ((sampleValue shr 8) and 0xFF).toByte()
+                }
+
+                val track = AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(sampleRate)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(buffer.size)
+                    .setTransferMode(AudioTrack.MODE_STATIC)
+                    .build()
+
+                track.write(buffer, 0, buffer.size)
+                track.play()
+                
+                // Allow tone to complete play before tearing down
+                Thread.sleep(durationMs.toLong() + 30)
+                track.stop()
+                track.release()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun shutdown() {
+        executor.shutdown()
+    }
+}
+
+data class PianoKey(
+    val name: String,
+    val semitoneOffset: Int,
+    val isBlack: Boolean,
+    val centerIndexOffset: Float = 0f
+)
 
 class MainActivity : ComponentActivity() {
+    private val synthEngine = SynthEngine()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MainAppScreen()
+            MainAppScreen(synthEngine)
         }
     }
-}
 
-// Custom Synth Sound Waveforms
-enum class Waveform(val displayName: String) {
-    SINE("Sine Wave"),
-    SQUARE("Square Synth"),
-    TRIANGLE("Triangle pluck"),
-    SAWTOOTH("Sawtooth Brass")
+    override fun onDestroy() {
+        super.onDestroy()
+        synthEngine.shutdown()
+    }
 }
-
-// Song model for the helper/tutorial feature
-data class Song(val title: String, val notes: List<Pair<Int, Long>>) // Note offset index, duration in ms
 
 @Composable
-fun MainAppScreen() {
-    // Synth Parameters
-    var currentWaveform by remember { mutableStateOf(Waveform.SINE) }
-    var octaveShift by remember { mutableStateOf(4) } // Default Middle Octave (C4 - B4)
-    var attackTime by remember { mutableStateOf(0.01f) } // Seconds
-    var releaseTime by remember { mutableStateOf(0.8f) } // Seconds
-    var volumeLevel by remember { mutableStateOf(0.7f) }
+fun MainAppScreen(synthEngine: SynthEngine) {
+    val scope = rememberCoroutineScope()
+    var currentOctave by remember { mutableStateOf(4) }
+    var currentWaveType by remember { mutableStateOf(WaveType.SINE) }
+    var sustainMs by remember { mutableStateOf(600) }
+    var volume by remember { mutableStateOf(0.7f) }
+    
+    var lastPlayedNote by remember { mutableStateOf("C") }
+    var lastPlayedFreq by remember { mutableStateOf(261.63) }
 
-    // App Interactive States
-    var activeNoteIndex by remember { mutableStateOf<Int?>(null) }
-    var scoreCount by remember { mutableStateOf(0) }
-    var highlightedNoteIndex by remember { mutableStateOf<Int?>(null) }
-    var isAutoPlaying by remember { mutableStateOf(false) }
+    // State list tracking currently active/pressed keys visually
+    val activeNotes = remember { mutableStateListOf<Int>() }
 
-    // Real-time Visualizer Animation State
-    val infiniteTransition = rememberInfiniteTransition(label = "oscilloscope")
-    val phaseOffset by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 2f * Math.PI.toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "phase"
-    )
-
-    // Demo Songs Database
-    val songsList = remember {
+    val whiteKeys = remember {
         listOf(
-            Song(
-                "Ode to Joy", listOf(
-                    Pair(4, 350L), Pair(4, 350L), Pair(5, 350L), Pair(7, 350L),
-                    Pair(7, 350L), Pair(5, 350L), Pair(4, 350L), Pair(2, 350L),
-                    Pair(0, 350L), Pair(0, 350L), Pair(2, 350L), Pair(4, 350L),
-                    Pair(4, 450L), Pair(2, 200L), Pair(2, 600L)
-                )
-            ),
-            Song(
-                "Twinkle Twinkle", listOf(
-                    Pair(0, 400L), Pair(0, 400L), Pair(7, 400L), Pair(7, 400L),
-                    Pair(9, 400L), Pair(9, 400L), Pair(7, 700L), Pair(5, 400L),
-                    Pair(5, 400L), Pair(4, 400L), Pair(4, 400L), Pair(2, 400L),
-                    Pair(2, 400L), Pair(0, 700L)
-                )
-            ),
-            Song(
-                "Mary Lamb", listOf(
-                    Pair(4, 300L), Pair(2, 300L), Pair(0, 300L), Pair(2, 300L),
-                    Pair(4, 300L), Pair(4, 300L), Pair(4, 500L), Pair(2, 300L),
-                    Pair(2, 300L), Pair(2, 500L), Pair(4, 300L), Pair(7, 300L),
-                    Pair(7, 500L)
-                )
-            )
+            PianoKey("C", 0, false),
+            PianoKey("D", 2, false),
+            PianoKey("E", 4, false),
+            PianoKey("F", 5, false),
+            PianoKey("G", 7, false),
+            PianoKey("A", 9, false),
+            PianoKey("B", 11, false),
+            PianoKey("C+", 12, false)
         )
-    )
-    var selectedSongIndex by remember { mutableStateOf(0) }
-    var currentSongStep by remember { mutableStateOf(0) }
-
-    // Core Audio Synthesizer Executor
-    fun playSynthesizedNote(noteIndex: Int) {
-        activeNoteIndex = noteIndex
-        // Highlight logic for tutorial
-        val expectedNote = songsList[selectedSongIndex].notes.getOrNull(currentSongStep)?.first
-        if (expectedNote == noteIndex) {
-            scoreCount += 10
-            if (currentSongStep < songsList[selectedSongIndex].notes.size - 1) {
-                currentSongStep++
-                highlightedNoteIndex = songsList[selectedSongIndex].notes[currentSongStep].first
-            } else {
-                currentSongStep = 0 // reset/loop
-                highlightedNoteIndex = songsList[selectedSongIndex].notes[0].first
-            }
-        }
-
-        // Calculate custom frequency dynamically (A4 = 440Hz base)
-        val frequency = calculateFrequency(noteIndex, octaveShift)
-
-        // Asynchronous synthesization & raw PCM AudioTrack streaming
-        CoroutineScope(Dispatchers.Default).launch {
-            synthesizeAndPlay(
-                frequency = frequency,
-                waveform = currentWaveform,
-                attack = attackTime,
-                release = releaseTime,
-                volume = volumeLevel
-            )
-        }
     }
 
-    // Set up first highlighted note for selected song tutorial
-    LaunchedEffect(selectedSongIndex) {
-        currentSongStep = 0
-        highlightedNoteIndex = songsList[selectedSongIndex].notes.firstOrNull()?.first
+    val blackKeys = remember {
+        listOf(
+            PianoKey("C#", 1, true, 1f),
+            PianoKey("D#", 3, true, 2f),
+            PianoKey("F#", 6, true, 4f),
+            PianoKey("G#", 8, true, 5f),
+            PianoKey("A#", 10, true, 6f)
+        )
     }
 
-    // Auto Player engine
-    val autoPlayScope = rememberCoroutineScope()
-    fun startAutoPlay() {
-        if (isAutoPlaying) return
-        isAutoPlaying = true
-        autoPlayScope.launch {
-            val song = songsList[selectedSongIndex]
-            for (step in song.notes) {
-                if (!isAutoPlaying) break
-                currentSongStep = song.notes.indexOf(step)
-                highlightedNoteIndex = step.first
-                playSynthesizedNote(step.first)
-                delay(step.second)
-            }
-            isAutoPlaying = false
-            currentSongStep = 0
-            highlightedNoteIndex = song.notes.firstOrNull()?.first
-        }
+    fun getFrequency(octave: Int, semitoneOffset: Int): Double {
+        val baseC = 261.63 * 2.0.pow((octave - 4).toDouble())
+        return baseC * 2.0.pow(semitoneOffset / 12.0)
     }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
-        color = Color(0xFF12141C) // Neo dark synthwave background
+        color = Color(0xFF0F0F14)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.SpaceBetween
+                .padding(16.dp)
         ) {
-            // Header Section
+            // Header / Brand
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.MusicNote,
-                            contentDescription = "Piano logo",
-                            tint = Color(0xFFFF2A6D),
-                            modifier = Modifier.size(28.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "DroidCraft Synth",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 22.sp,
-                            color = Color.White,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
                     Text(
-                        text = "Pure Real-Time Custom DSP Engine",
-                        fontSize = 11.sp,
-                        color = Color(0xFF05D9E8),
-                        fontFamily = FontFamily.Monospace
+                        text = "DROIDCRFT SYNTH",
+                        color = Color(0xFF00FFC2),
+                        fontWeight = FontWeight.ExtraBold,
+                        style = MaterialTheme.typography.titleMedium,
+                        letterSpacing = 1.5.sp
                     )
-                }
-
-                // Interactive Tutorial Score Widget
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E2235)),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Star,
-                            contentDescription = "Score",
-                            tint = Color.Yellow,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Score: $scoreCount",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                }
-            }
-
-            // Waveform and Parameter Control Panel
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 6.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF181C2E)),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
                     Text(
-                        text = "INSTRUMENT SYNTHESIS PARAMETERS",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF05D9E8),
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-
-                    // Waveform Selector Chips
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Waveform.values().forEach { wave ->
-                            val isSelected = currentWaveform == wave
-                            val chipBg = if (isSelected) Color(0xFFFF2A6D) else Color(0xFF262C48)
-                            val chipTextColor = if (isSelected) Color.White else Color(0xFF8F9BB3)
-
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(horizontal = 2.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(chipBg)
-                                    .clickable { currentWaveform = wave }
-                                    .padding(vertical = 8.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = wave.displayName.split(" ")[0],
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = chipTextColor,
-                                    textAlign = TextAlign.Center
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // ADSR & Octave controls layout
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        // Left parameter sliders
-                        Column(modifier = Modifier.weight(1.2f)) {
-                            // Volume control
-                            Text(
-                                text = "OUTPUT GAIN: ${(volumeLevel * 100).toInt()}%",
-                                fontSize = 10.sp,
-                                color = Color(0xFF8F9BB3)
-                            )
-                            Slider(
-                                value = volumeLevel,
-                                onValueChange = { volumeLevel = it },
-                                valueRange = 0.1f..1.0f,
-                                modifier = Modifier.height(28.dp),
-                                colors = SliderDefaults.colors(
-                                    thumbColor = Color(0xFF05D9E8),
-                                    activeTrackColor = Color(0xFF05D9E8)
-                                )
-                            )
-
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            // Attack Control
-                            Text(
-                                text = "ATTACK TIME: ${String.format("%.3f", attackTime)}s",
-                                fontSize = 10.sp,
-                                color = Color(0xFF8F9BB3)
-                            )
-                            Slider(
-                                value = attackTime,
-                                onValueChange = { attackTime = it },
-                                valueRange = 0.001f..0.3f,
-                                modifier = Modifier.height(28.dp),
-                                colors = SliderDefaults.colors(
-                                    thumbColor = Color(0xFFFF2A6D),
-                                    activeTrackColor = Color(0xFFFF2A6D)
-                                )
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(16.dp))
-
-                        // Right parameter sliders
-                        Column(modifier = Modifier.weight(1.2f)) {
-                            // Release Control
-                            Text(
-                                text = "DECAY/RELEASE: ${String.format("%.2f", releaseTime)}s",
-                                fontSize = 10.sp,
-                                color = Color(0xFF8F9BB3)
-                            )
-                            Slider(
-                                value = releaseTime,
-                                onValueChange = { releaseTime = it },
-                                valueRange = 0.1f..2.0f,
-                                modifier = Modifier.height(28.dp),
-                                colors = SliderDefaults.colors(
-                                    thumbColor = Color(0xFF01F976),
-                                    activeTrackColor = Color(0xFF01F976)
-                                )
-                            )
-
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            // Octave Selector Buttons
-                            Text(
-                                text = "CURRENT BASE OCTAVE: C$octaveShift",
-                                fontSize = 10.sp,
-                                color = Color(0xFF8F9BB3)
-                            )
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Button(
-                                    onClick = { if (octaveShift > 2) octaveShift-- },
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(28.dp),
-                                    contentPadding = PaddingValues(0.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF262C48))
-                                ) {
-                                    Text("-1 Oct", fontSize = 10.sp, color = Color.White)
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Button(
-                                    onClick = { if (octaveShift < 6) octaveShift++ },
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(28.dp),
-                                    contentPadding = PaddingValues(0.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF262C48))
-                                ) {
-                                    Text("+1 Oct", fontSize = 10.sp, color = Color.White)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Real-Time Oscilloscope Visualizer
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(90.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFF0B0D18)),
-                contentAlignment = Alignment.Center
-            ) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val width = size.width
-                    val height = size.height
-                    val middleY = height / 2f
-                    val path = Path()
-
-                    path.moveTo(0f, middleY)
-
-                    // Draw an dynamic neon oscilloscope curve depending on the chosen waveform
-                    for (x in 0..width.toInt() step 4) {
-                        val relativeX = x / width
-                        val angle = (relativeX * 6.0 * Math.PI) + phaseOffset
-
-                        val amplitudeFactor = if (activeNoteIndex != null) 0.8f else 0.15f
-                        val waveVal = when (currentWaveform) {
-                            Waveform.SINE -> sin(angle)
-                            Waveform.SQUARE -> if (sin(angle) >= 0) 0.8 else -0.8
-                            Waveform.TRIANGLE -> (2.0 / Math.PI) * asin(sin(angle))
-                            Waveform.SAWTOOTH -> 2.0 * (relativeX * 12.0 - floor(0.5 + relativeX * 12.0))
-                        }
-
-                        val y = middleY + (waveVal * (height * 0.35f) * amplitudeFactor).toFloat()
-                        path.lineTo(x.toFloat(), y)
-                    }
-
-                    drawPath(
-                        path = path,
-                        brush = Brush.linearGradient(
-                            colors = listOf(Color(0xFF05D9E8), Color(0xFFFF2A6D))
-                        ),
-                        style = Stroke(width = 3.dp.toPx())
+                        text = "Custom Wave Synthesis Engine",
+                        color = Color.LightGray.copy(alpha = 0.7f),
+                        style = MaterialTheme.typography.labelSmall
                     )
                 }
-
-                // Waveform overlay HUD info text
+                
+                // Octave controller
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                        .align(Alignment.TopStart),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = "REALTIME DSP OSCILLOSCOPE",
-                        fontSize = 9.sp,
-                        color = Color(0xFF8F9BB3),
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Text(
-                        text = "ACTIVE VOICE: ${if (activeNoteIndex != null) "C" + octaveShift + " SYNTH" else "IDLE"}",
-                        fontSize = 9.sp,
-                        color = if (activeNoteIndex != null) Color(0xFF01F976) else Color(0xFFFF2A6D),
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            // Interactive Helper / Song Practice Center
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 6.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF181C2E)),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1.5f)) {
-                        Text(
-                            text = "PRACTICE & TUTORIAL PLAYLIST",
-                            fontSize = 9.sp,
-                            color = Color(0xFF05D9E8),
-                            fontWeight = FontWeight.Bold
-                        )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(
-                                onClick = {
-                                    if (selectedSongIndex > 0) selectedSongIndex--
-                                    else selectedSongIndex = songsList.size - 1
-                                },
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.ArrowBack,
-                                    contentDescription = "Prev",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                            Text(
-                                text = songsList[selectedSongIndex].title,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                modifier = Modifier.padding(horizontal = 8.dp),
-                                textAlign = TextAlign.Center
-                            )
-                            IconButton(
-                                onClick = {
-                                    if (selectedSongIndex < songsList.size - 1) selectedSongIndex++
-                                    else selectedSongIndex = 0
-                                },
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.ArrowForward,
-                                    contentDescription = "Next",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    // Autoplay / Playback button
                     Button(
-                        onClick = {
-                            if (isAutoPlaying) {
-                                isAutoPlaying = false
-                            } else {
-                                startAutoPlay()
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isAutoPlaying) Color(0xFFFF2A6D) else Color(0xFF01F976)
-                        ),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.height(36.dp)
+                        onClick = { if (currentOctave > 1) currentOctave-- },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E1E24)),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        modifier = Modifier.defaultMinSize(minWidth = 36.dp, minHeight = 36.dp)
                     ) {
-                        Icon(
-                            imageVector = if (isAutoPlaying) Icons.Default.Stop else Icons.Default.PlayArrow,
-                            contentDescription = "Auto",
-                            tint = Color.Black,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = if (isAutoPlaying) "STOP" else "AUTO PLAY",
-                            color = Color.Black,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp
-                        )
+                        Text("-", color = Color(0xFF00FFC2), fontWeight = FontWeight.Bold)
+                    }
+                    Text(
+                        text = "OCTAVE $currentOctave",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Button(
+                        onClick = { if (currentOctave < 7) currentOctave++ },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E1E24)),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        modifier = Modifier.defaultMinSize(minWidth = 36.dp, minHeight = 36.dp)
+                    ) {
+                        Text("+", color = Color(0xFF00FFC2), fontWeight = FontWeight.Bold)
                     }
                 }
             }
 
-            // Piano Keyboard Module
-            Box(
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Main settings scroll container
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                // Waveform Selector Cards
+                Text(
+                    text = "WAVEFORM SELECTOR",
+                    color = Color.White.copy(alpha = 0.5f),
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.labelMedium
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    WaveType.values().forEach { type ->
+                        val isSelected = currentWaveType == type
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .background(
+                                    if (isSelected) Color(0xFF00FFC2) else Color(0xFF1E1E24),
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (isSelected) Color.White else Color.Transparent,
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .pointerInput(type) {
+                                    detectTapGestures {
+                                        currentWaveType = type
+                                    }
+                                }
+                                .padding(vertical = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = type.name,
+                                    color = if (isSelected) Color.Black else Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Synthesizer Sliders
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "SUSTAIN: ${sustainMs}ms",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        Slider(
+                            value = sustainMs.toFloat(),
+                            onValueChange = { sustainMs = it.toInt() },
+                            valueRange = 200f..1500f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color(0xFF00FFC2),
+                                activeTrackColor = Color(0xFF00FFC2),
+                                inactiveTrackColor = Color(0xFF1E1E24)
+                            )
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "VOLUME: ${(volume * 100).toInt()}%",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        Slider(
+                            value = volume,
+                            onValueChange = { volume = it },
+                            valueRange = 0.1f..1.0f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color(0xFF00D2FF),
+                                activeTrackColor = Color(0xFF00D2FF),
+                                inactiveTrackColor = Color(0xFF1E1E24)
+                            )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Realtime Waveform Visualization
+                Text(
+                    text = "VISUALIZER: $lastPlayedNote (${String.format("%.2f", lastPlayedFreq)} Hz)",
+                    color = Color.White.copy(alpha = 0.7f),
+                    style = MaterialTheme.typography.labelMedium
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                WaveformVisualizer(
+                    waveType = currentWaveType,
+                    activeNote = lastPlayedNote,
+                    frequency = lastPlayedFreq
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Piano Keyboard UI
+            Text(
+                text = "PIANO KEYS (TOUCH TO PLAY)",
+                color = Color.White.copy(alpha = 0.5f),
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+
+            BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(220.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF0B0D18))
+                    .height(230.dp)
+                    .background(Color.Black, shape = RoundedCornerShape(12.dp))
                     .padding(4.dp)
             ) {
-                // Key Definitions of one full customized musical octave
-                // We map 12 dynamic notes: C (0), C#(1), D(2), D#(3), E(4), F(5), F#(6), G(7), G#(8), A(9), A#(10), B(11)
-                val whiteKeyOffsets = listOf(
-                    Pair("C", 0),
-                    Pair("D", 2),
-                    Pair("E", 4),
-                    Pair("F", 5),
-                    Pair("G", 7),
-                    Pair("A", 9),
-                    Pair("B", 11)
-                )
+                val containerWidth = maxWidth
+                val totalWhiteKeys = whiteKeys.size
+                val whiteKeyWidth = containerWidth / totalWhiteKeys
+                val blackKeyWidth = whiteKeyWidth * 0.65f
 
-                val blackKeyOffsets = listOf(
-                    Pair("C#", 1),
-                    Pair("D#", 3),
-                    null, // empty gap between E & F
-                    Pair("F#", 6),
-                    Pair("G#", 8),
-                    Pair("A#", 10)
-                )
-
-                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                    val totalWidth = maxWidth
-                    val whiteKeyWidth = totalWidth / 7
-
-                    // 1. Render White Keys First (Underlay layer)
-                    Row(modifier = Modifier.fillMaxSize()) {
-                        whiteKeyOffsets.forEach { note ->
-                            val isHighlighted = highlightedNoteIndex == note.second
-                            val isActive = activeNoteIndex == note.second
-
-                            val animatedKeyColor by animateColorAsState(
-                                targetValue = when {
-                                    isActive -> Color(0xFFFF2A6D)
-                                    isHighlighted -> Color(0xFF05D9E8)
-                                    else -> Color.White
-                                },
-                                animationSpec = tween(120),
-                                label = "WhiteKeyColor"
-                            )
-
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight()
-                                    .padding(2.dp)
-                                    .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
-                                    .background(animatedKeyColor)
-                                    .clickable { playSynthesizedNote(note.second) },
-                                contentAlignment = Alignment.BottomCenter
-                            ) {
-                                Text(
-                                    text = note.first,
-                                    color = if (isActive || isHighlighted) Color.White else Color.Black,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(bottom = 12.dp),
-                                    fontFamily = FontFamily.Monospace
+                // Render White Keys
+                Row(modifier = Modifier.fillMaxSize()) {
+                    whiteKeys.forEach { key ->
+                        val isActive = activeNotes.contains(key.semitoneOffset)
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .padding(horizontal = 2.dp)
+                                .background(
+                                    color = if (isActive) Color(0xFF00FFC2) else Color.White,
+                                    shape = RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp)
                                 )
-                            }
+                                .pointerInput(key) {
+                                    detectTapGestures(
+                                        onPress = {
+                                            val freq = getFrequency(currentOctave, key.semitoneOffset)
+                                            lastPlayedNote = "${key.name}$currentOctave"
+                                            lastPlayedFreq = freq
+                                            scope.launch {
+                                                activeNotes.add(key.semitoneOffset)
+                                                synthEngine.playNote(freq, currentWaveType, sustainMs, volume)
+                                                delay(sustainMs.toLong().coerceAtLeast(150))
+                                                activeNotes.remove(key.semitoneOffset)
+                                            }
+                                        }
+                                    )
+                                },
+                            contentAlignment = Alignment.BottomCenter
+                        ) {
+                            Text(
+                                text = key.name,
+                                color = if (isActive) Color.Black else Color.DarkGray,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(bottom = 12.dp),
+                                textAlign = TextAlign.Center
+                            )
                         }
                     }
+                }
 
-                    // 2. Render Black Keys (Overlay Layer at boundary positions)
-                    val blackKeyWidth = whiteKeyWidth * 0.65f
-                    blackKeyOffsets.forEachIndexed { index, pair ->
-                        if (pair != null) {
-                            val isHighlighted = highlightedNoteIndex == pair.second
-                            val isActive = activeNoteIndex == pair.second
+                // Render Black Keys Overlaid
+                blackKeys.forEach { key ->
+                    val isActive = activeNotes.contains(key.semitoneOffset)
+                    // Offset positioning matches key gaps precisely
+                    val leftOffset = (key.centerIndexOffset * whiteKeyWidth.value).dp - (blackKeyWidth.value / 2).dp
 
-                            val animatedBlackKeyColor by animateColorAsState(
-                                targetValue = when {
-                                    isActive -> Color(0xFFFF2A6D)
-                                    isHighlighted -> Color(0xFF05D9E8)
-                                    else -> Color(0xFF1E2235)
-                                },
-                                animationSpec = tween(120),
-                                label = "BlackKeyColor"
+                    Box(
+                        modifier = Modifier
+                            .absoluteOffset(x = leftOffset)
+                            .width(blackKeyWidth)
+                            .height(135.dp)
+                            .background(
+                                color = if (isActive) Color(0xFF00D2FF) else Color(0xFF232329),
+                                shape = RoundedCornerShape(bottomStart = 5.dp, bottomEnd = 5.dp)
                             )
-
-                            // Position black keys perfectly on the dividing gaps between white keys
-                            val leftOffset = (whiteKeyWidth * (index + 1)) - (blackKeyWidth / 2f)
-
-                            Box(
-                                modifier = Modifier
-                                    .offset(x = leftOffset)
-                                    .width(blackKeyWidth)
-                                    .fillMaxHeight(0.58f)
-                                    .clip(RoundedCornerShape(bottomStart = 5.dp, bottomEnd = 5.dp))
-                                    .background(animatedBlackKeyColor)
-                                    .clickable { playSynthesizedNote(pair.second) },
-                                contentAlignment = Alignment.BottomCenter
-                            ) {
-                                Text(
-                                    text = pair.first,
-                                    color = if (isActive || isHighlighted) Color.Black else Color.White,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(bottom = 8.dp),
-                                    fontFamily = FontFamily.Monospace
+                            .border(
+                                width = 1.dp,
+                                color = Color.Black,
+                                shape = RoundedCornerShape(bottomStart = 5.dp, bottomEnd = 5.dp)
+                            )
+                            .pointerInput(key) {
+                                detectTapGestures(
+                                    onPress = {
+                                        val freq = getFrequency(currentOctave, key.semitoneOffset)
+                                        lastPlayedNote = "${key.name}$currentOctave"
+                                        lastPlayedFreq = freq
+                                        scope.launch {
+                                            activeNotes.add(key.semitoneOffset)
+                                            synthEngine.playNote(freq, currentWaveType, sustainMs, volume)
+                                            delay(sustainMs.toLong().coerceAtLeast(150))
+                                            activeNotes.remove(key.semitoneOffset)
+                                        }
+                                    }
                                 )
-                            }
-                        }
+                            },
+                        contentAlignment = Alignment.BottomCenter
+                    ) {
+                        Text(
+                            text = key.name,
+                            color = if (isActive) Color.Black else Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 9.sp,
+                            modifier = Modifier.padding(bottom = 8.dp),
+                            textAlign = TextAlign.Center
+                        )
                     }
                 }
             }
         }
     }
-
-    // Reset active visual notes representation periodically to keep the scope clean
-    LaunchedEffect(activeNoteIndex) {
-        if (activeNoteIndex != null) {
-            delay(350)
-            activeNoteIndex = null
-        }
-    }
 }
 
-/**
- * Calculates raw note frequency from middle standard octave
- * We scale pitch according to musical semi-tone steps relative to A4 (440Hz)
- */
-fun calculateFrequency(noteIndex: Int, octaveShift: Int): Double {
-    val a4Index = 9 // A4 semi-tone index
-    val a4Octave = 4
-    val totalSteps = (noteIndex - a4Index) + (octaveShift - a4Octave) * 12
-    return 440.0 * Math.pow(2.0, totalSteps / 12.0)
-}
-
-/**
- * Performs immediate high-speed memory-efficient audio synthesization using Android's AudioTrack.
- * Avoids any assets or disk reads for instant zero-dependency execution.
- */
-fun synthesizeAndPlay(
-    frequency: Double,
-    waveform: Waveform,
-    attack: Float,
-    release: Float,
-    volume: Float
-) {
-    val sampleRate = 22050 // Optimized standard target sample rate for custom synthetic outputs
-    val durationSeconds = attack + release
-    val totalSamples = (durationSeconds * sampleRate).toInt()
-    val rawSamplesBuffer = ShortArray(totalSamples)
-
-    // Synthesize physical digital waveform arrays directly to raw memory buffer
-    for (i in 0 until totalSamples) {
-        val t = i.toDouble() / sampleRate
-        val angle = 2.0 * Math.PI * frequency * t
-
-        val baseWaveVal = when (waveform) {
-            Waveform.SINE -> sin(angle)
-            Waveform.SQUARE -> if (sin(angle) >= 0.0) 1.0 else -1.0
-            Waveform.TRIANGLE -> (2.0 / Math.PI) * asin(sin(angle))
-            Waveform.SAWTOOTH -> 2.0 * (t * frequency - floor(0.5 + t * frequency))
-        }
-
-        // Custom ADSR (Attack, Decay, Sustain, Release) volume envelope shaping
-        val amplitudeEnvelope = if (t < attack) {
-            t / attack // Attack ramping up to peak amplitude
-        } else {
-            // Decay & release ramping down exponentially
-            val decayTime = t - attack
-            Math.exp(-3.0 * decayTime / release)
-        }
-
-        val scaledValue = (baseWaveVal * amplitudeEnvelope * Short.MAX_VALUE * volume).toInt()
-        rawSamplesBuffer[i] = scaledValue.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
-    }
-
-    // Write straight to AudioTrack in static memory buffer mode for optimal hardware performance
-    try {
-        val audioTrack = AudioTrack(
-            AudioManager.STREAM_MUSIC,
-            sampleRate,
-            AudioFormat.CHANNEL_OUT_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            totalSamples * 2,
-            AudioTrack.MODE_STATIC
-        )
-        audioTrack.write(rawSamplesBuffer, 0, totalSamples)
-        audioTrack.play()
-
-        // Clean up allocation resources instantly after execution to avoid system leaks
-        Thread {
-            try {
-                Thread.sleep((durationSeconds * 1000).toLong() + 200)
-                audioTrack.stop()
-                audioTrack.release()
-            } catch (e: Exception) {
-                // Safe ignore if track was already destroyed
+@Composable
+fun WaveformVisualizer(waveType: WaveType, activeNote: String, frequency: Double) {
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(100.dp)
+            .background(Color(0xFF15151A), shape = RoundedCornerShape(8.dp))
+            .border(1.dp, Color(0xFF2A2A35), shape = RoundedCornerShape(8.dp))
+    ) {
+        val width = size.width
+        val height = size.height
+        val path = Path()
+        
+        val cycles = 3.5f
+        val points = 250
+        
+        path.moveTo(0f, height / 2)
+        for (i in 0..points) {
+            val x = (i.toFloat() / points) * width
+            val ratio = i.toFloat() / points
+            val angle = ratio * cycles * 2.0 * PI
+            
+            // Generate visual approximation corresponding to chosen synthesis wave
+            val yOffset = when (waveType) {
+                WaveType.SINE -> sin(angle)
+                WaveType.SQUARE -> if (sin(angle) >= 0) 0.6 else -0.6
+                WaveType.TRIANGLE -> 2.0 * abs(2.0 * ((angle / (2.0 * PI)) % 1.0 - 0.5)) - 1.0
+                WaveType.SAWTOOTH -> 2.0 * ((angle / (2.0 * PI)) % 1.0 - 0.5)
             }
-        }.start()
+            
+            // Envelope damping visual output at ends for nice aesthetic
+            val boundaryFade = sin(ratio * PI)
+            val y = (height / 2) + (yOffset * (height * 0.38) * boundaryFade).toFloat()
+            
+            if (i == 0) {
+                path.moveTo(x, y)
+            } else {
+                path.lineTo(x, y)
+            }
+        }
 
-    } catch (e: Exception) {
-        e.printStackTrace()
+        drawPath(
+            path = path,
+            color = Color(0xFF00FFC2),
+            style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
+        )
     }
 }
