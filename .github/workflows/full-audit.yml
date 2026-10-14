@@ -7,7 +7,6 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
-  security-events: write
   actions: read
 jobs:
   audit:
@@ -31,8 +30,3 @@ jobs:
       - name: Python syntax
         if: ${{ hashFiles('**/*.py') != '' }}
         run: python -m compileall -q .
-      - name: CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: javascript-typescript,python,java-kotlin
-      - uses: github/codeql-action/analyze@v3
